@@ -1,0 +1,288 @@
+#!/usr/bin/env python3
+"""airtype — 极简语音输入法. 快捷键 → 录音 → STT → 输入."""
+
+import os, re, sys, time, signal, shutil, argparse, subprocess
+from pathlib import Path
+
+DIR = Path.home() / '.local' / 'share' / 'airtype'
+CONFIG = DIR / 'config'
+LOG = DIR / 'airtype.log'
+LOCK = Path('/tmp/airtype.lock')
+PIDFILE = Path('/tmp/airtype-overlay.pid')
+STARTFILE = Path('/tmp/airtype-start-time')
+
+MODEL = 'sense-voice-small-q5_k.gguf'
+MAX_SECONDS = 3600
+LANG = 'zh'
+THREADS = 4
+
+
+def load_config():
+    global MODEL, MAX_SECONDS, LANG, THREADS
+    if not CONFIG.is_file():
+        return
+    try:
+        for line in CONFIG.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            if '=' in line:
+                k, v = line.split('=', 1)
+                k, v = k.strip(), v.strip().strip('"').strip("'")
+                if k == 'MODEL':      MODEL = v
+                elif k == 'MAX_SECONDS': MAX_SECONDS = int(v)
+                elif k == 'LANG':      LANG = v
+                elif k == 'THREADS':   THREADS = int(v)
+    except Exception as e:
+        log(f'! 配置解析错误: {e}')
+
+
+def log(msg):
+    ts = time.strftime('%Y-%m-%d %H:%M:%S')
+    try:
+        LOG.parent.mkdir(parents=True, exist_ok=True)
+        with open(LOG, 'a') as f:
+            f.write(f'{ts} {os.getpid()} {msg}\n')
+    except Exception:
+        pass
+
+
+def kill_overlay():
+    killed = False
+    if PIDFILE.is_file():
+        try:
+            pid = int(PIDFILE.read_text().strip())
+            os.kill(pid, signal.SIGTERM)
+            killed = True
+        except (ProcessLookupError, ValueError):
+            pass
+        PIDFILE.unlink(missing_ok=True)
+    if killed:
+        time.sleep(0.3)
+
+
+def show_overlay(phase):
+    overlay = DIR / 'voice-overlay'
+    if not os.access(overlay, os.X_OK):
+        return
+    kill_overlay()
+    p = subprocess.Popen([str(overlay), phase])
+    PIDFILE.write_text(str(p.pid))
+
+
+def show_error(msg):
+    """Show error overlay and log the error."""
+    log(f'! ERROR: {msg}')
+    overlay = DIR / 'voice-overlay'
+    if os.access(overlay, os.X_OK):
+        if len(msg) > 40:
+            msg = msg[:37] + '...'
+        kill_overlay()
+        show_overlay(f'error:{msg}')
+        time.sleep(3)
+    kill_overlay()
+
+
+def copy_to_clipboard(text):
+    """Copy text to clipboard. Wayland uses wl-copy, X11 uses xclip."""
+    tools = [
+        (['wl-copy'], {}),
+        (['xclip', '-selection', 'clipboard'], {}),
+        (['xsel', '--clipboard', '--input'], {}),
+    ]
+    for cmd, _ in tools:
+        if shutil.which(cmd[0]):
+            r = subprocess.run(cmd, input=text.encode(), check=False)
+            return r.returncode == 0
+    return False
+
+
+_cleaned_up = False
+_audio = None
+
+def cleanup():
+    global _cleaned_up
+    if _cleaned_up:
+        return
+    _cleaned_up = True
+    # 防止 cleanup 期间收到第二个 SIGTERM 跳过后续清理
+    prev_term = signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    prev_hup = signal.signal(signal.SIGHUP, signal.SIG_IGN)
+    try:
+        kill_overlay()
+        if _audio and _audio.is_file():
+            _audio.unlink(missing_ok=True)
+        for f in (LOCK, STARTFILE):
+            f.unlink(missing_ok=True)
+    finally:
+        signal.signal(signal.SIGTERM, prev_term)
+        signal.signal(signal.SIGHUP, prev_hup)
+
+
+def parse_output(raw):
+    lines = []
+    for line in raw.splitlines():
+        line = re.sub(r'^\[[\d.]+-[\d.]+\]\s*', '', line)
+        line = re.sub(r'<\|[^|]*\|>', '', line)
+        line = line.strip()
+        if line:
+            lines.append(line)
+    text = ' '.join(lines)
+    return re.sub(r' +', ' ', text).strip()
+
+
+def main():
+    global MODEL, MAX_SECONDS, LANG, THREADS
+
+    load_config()
+
+    p = argparse.ArgumentParser(description='airtype — voice to text, anywhere')
+    p.add_argument('--lang', default=LANG, help='语言代码')
+    p.add_argument('--model', default=MODEL, help='GGUF 模型文件名')
+    p.add_argument('--max-s', type=int, default=MAX_SECONDS, help='最大录音秒数')
+    p.add_argument('--threads', type=int, default=THREADS, help='推理线程数')
+    p.add_argument('--clipboard', action='store_true',
+                   help='复制到剪贴板而非直接输入')
+    args = p.parse_args()
+
+    MODEL = args.model
+    MAX_SECONDS = args.max_s
+    LANG = args.lang
+    THREADS = args.threads
+
+    log('--- 启动 ---')
+
+    # --- 二次按键: 终止当前录音 ---
+    if LOCK.is_file():
+        try:
+            pid = int(LOCK.read_text().strip())
+            try:
+                os.kill(pid, 0)
+                log(f'二次按键: 终止录音 PID={pid}')
+                subprocess.run(['pkill', '-f', 'rec.*airtype-input'],
+                               capture_output=True)
+                kill_overlay()
+                sys.exit(0)
+            except (ProcessLookupError, PermissionError):
+                log(f'残留锁清除 PID={pid}')
+                LOCK.unlink()
+        except (ValueError, FileNotFoundError):
+            LOCK.unlink(missing_ok=True)
+
+    # --- 首次按键: 原子创建锁 ---
+    try:
+        fd = os.open(str(LOCK), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        os.write(fd, str(os.getpid()).encode())
+        os.close(fd)
+    except FileExistsError:
+        log('锁竞争失败，退出')
+        sys.exit(0)
+    log(f'写锁 PID={os.getpid()}')
+
+    sensevoice = DIR / 'SenseVoice.cpp' / 'build' / 'bin' / 'sense-voice-main'
+    model_path = DIR / 'models' / MODEL
+
+    checks = [
+        (sensevoice.is_file(), 'STT engine not found'),
+        (model_path.is_file(), f'Model not found: {MODEL}'),
+        (shutil.which('rec') is not None, 'sox (rec) not installed'),
+    ]
+    if not args.clipboard:
+        checks.append((shutil.which('wtype') is not None, 'wtype not installed'))
+    else:
+        checks.append((any(shutil.which(t) for t in ('wl-copy', 'xclip', 'xsel')),
+                        'No clipboard tool (wl-copy/xclip)'))
+    for ok, msg in checks:
+        if not ok:
+            show_error(msg)
+            sys.exit(1)
+
+    has_overlay = os.access(DIR / 'voice-overlay', os.X_OK)
+    log(f'overlay={1 if has_overlay else 0} model={MODEL} clipboard={1 if args.clipboard else 0}')
+
+    global _audio
+    _audio = Path(f'/tmp/airtype-input-{os.getpid()}.wav')
+    audio = _audio
+
+    # --- 录音 ---
+    log(f'录音 max={MAX_SECONDS} (再按快捷键终止)')
+    # 先启动录音，再显示 overlay，避免音频设备初始化导致前 1-2 秒丢失
+    rec_proc = subprocess.Popen(
+        ['timeout', str(MAX_SECONDS), 'rec', '-q', '-r', '16000',
+         '-c', '1', '-b', '16', str(audio)],
+        stderr=subprocess.DEVNULL)
+    if has_overlay:
+        STARTFILE.write_text(str(int(time.time())))
+        show_overlay('listening')
+
+    rec_proc.wait()
+
+    try:
+        sz = audio.stat().st_size
+    except FileNotFoundError:
+        log('录音被取消')
+        sys.exit(0)
+
+    if sz < 1600:
+        log('音频过短')
+        audio.unlink(missing_ok=True)
+        sys.exit(0)
+
+    log(f'录音完成 {sz} bytes')
+
+    # --- STT 推理 ---
+    kill_overlay()
+    log('开始识别')
+
+    r = subprocess.run(
+        [str(sensevoice), '-m', str(model_path), '-l', LANG,
+         '--use-itn', '-t', str(THREADS), str(audio)],
+        capture_output=True, text=True, check=False)
+    raw = r.stdout.strip() if r.stdout else ''
+    log(f'RAW: {raw[:300]}')
+
+    audio.unlink(missing_ok=True)
+
+    if not raw:
+        show_error('Recognition empty')
+        sys.exit(0)
+
+    text = parse_output(raw)
+    if not text:
+        show_error('Parse failed')
+        sys.exit(0)
+
+    log(f'识别完成: {text}')
+
+    if args.clipboard:
+        ok = copy_to_clipboard(text)
+        if ok:
+            log('已复制到剪贴板')
+            if has_overlay:
+                kill_overlay()
+                show_overlay('clipboard')
+                time.sleep(2)
+        else:
+            show_error('Clipboard copy failed')
+    else:
+        kill_overlay()
+        r = subprocess.run(['wtype', '--', text], check=False)
+        if r.returncode != 0:
+            log(f'! wtype 失败: exit={r.returncode}')
+        else:
+            log('已输入')
+
+
+def _handle_signal(signum, frame):
+    sys.exit(0)
+
+if __name__ == '__main__':
+    signal.signal(signal.SIGTERM, _handle_signal)
+    signal.signal(signal.SIGHUP, _handle_signal)
+    signal.signal(signal.SIGINT, _handle_signal)
+    try:
+        main()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        cleanup()
