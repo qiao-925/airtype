@@ -11,7 +11,6 @@ REPO_SENSEVOICE = 'https://github.com/lovemefan/SenseVoice.cpp'
 REPO_LLAMA = 'https://github.com/ggml-org/llama.cpp'
 REPO_BASE = 'https://raw.githubusercontent.com/qiao-925/airtype/master'
 MODEL_BASE = 'https://huggingface.co/lovemefan/sense-voice-gguf/resolve/main'
-QWEN_BASE = 'https://huggingface.co/Qwen/Qwen2.5-Instruct-GGUF/resolve/main'
 STB_URL = 'https://raw.githubusercontent.com/nothings/stb/master/stb_truetype.h'
 
 RED = '\033[0;31m'; GREEN = '\033[0;32m'; YELLOW = '\033[1;33m'; CYAN = '\033[0;36m'; NC = '\033[0m'
@@ -141,10 +140,10 @@ MODELS = {
 RECO_KEY = {4: '2', 5: '6', 8: '8'}
 
 REFINE_MODELS = {
-    '0': (None,                                  '0 MB',     '跳过'),
-    '1': ('qwen2.5-0.5b-instruct-q4_k_m.gguf', '469 MB',   '0.5B'),
-    '2': ('qwen2.5-1.5b-instruct-q4_k_m.gguf', '1066 MB',  '1.5B'),
-    '3': ('qwen2.5-3b-instruct-q4_k_m.gguf',  '2007 MB',  '3B'),
+    '0': (None,      '0 MB',     '跳过',   ''),
+    '1': ('0.5B',    '469 MB',   '0.5B',   'Qwen2.5-0.5B'),
+    '2': ('1.5B',    '1066 MB',  '1.5B',   'Qwen2.5-1.5B'),
+    '3': ('3B',      '2007 MB',  '3B',     'Qwen2.5-3B'),
 }
 
 # 硬件等级 → REFINE_MODELS 字典 key
@@ -202,18 +201,18 @@ def select_refine_model(reco):
     choice = ask(f'  输入 ID 确认或回车使用推荐 [ID {reco_key}]: ')
 
     if choice == '':
-        refine_model, refine_size, refine_name = rdef
+        refine_size, refine_size_str, refine_name, _ = rdef
     elif choice in REFINE_MODELS:
-        refine_model, refine_size, refine_name = REFINE_MODELS[choice]
+        refine_size, refine_size_str, refine_name, _ = REFINE_MODELS[choice]
     else:
         warn(f'无效选项，使用推荐: {rdef[2]}')
-        refine_model, refine_size, refine_name = rdef
+        refine_size, refine_size_str, refine_name, _ = rdef
 
-    if refine_model:
-        info(f'选定: {refine_name} ({refine_size})')
+    if refine_size:
+        info(f'选定: {refine_name} ({refine_size_str})')
     else:
         info('跳过后处理模型')
-    return refine_model, refine_size, refine_name
+    return refine_size, refine_size_str, refine_name
 
 
 def install_deps():
@@ -324,22 +323,24 @@ def download_model(tier_model, tier_size, tier_name):
     return tier_model, tier_size, tier_name
 
 
-def download_refine_model(refine_model, refine_size, refine_name):
-    if not refine_model:
-        return refine_model, refine_size, refine_name
+def download_refine_model(refine_size, refine_size_str, refine_name):
+    if not refine_size:
+        return refine_size, refine_size_str, refine_name
+    filename = f'Qwen2.5-{refine_size}-Instruct-Q4_K_M.gguf'
     MODEL_DIR = DIR / 'models'
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
-    model_file = MODEL_DIR / refine_model
+    model_file = MODEL_DIR / filename
     if model_file.is_file():
-        info(f'模型已存在: {refine_model}')
-        return refine_model, refine_size, refine_name
-    info(f'下载模型 {refine_model} ({refine_size}) …')
-    ok = download(f'{QWEN_BASE}/{refine_model}', str(model_file), f'下载 {refine_name}')
+        info(f'模型已存在: {filename}')
+        return refine_size, refine_size_str, refine_name
+    url = f'https://huggingface.co/bartowski/Qwen2.5-{refine_size}-Instruct-GGUF/resolve/main/{filename}'
+    info(f'下载模型 {filename} ({refine_size_str}) …')
+    ok = download(url, str(model_file), f'下载 {refine_name}')
     if not ok:
         warn('后处理模型下载失败，跳过后处理')
-        return None, refine_size, refine_name
+        return None, refine_size_str, refine_name
     info('模型下载完成')
-    return refine_model, refine_size, refine_name
+    return refine_size, refine_size_str, refine_name
 
 
 def deploy_airtype_script():
@@ -361,7 +362,7 @@ def deploy_airtype_script():
     info(f'airtype → {dst}')
 
 
-def deploy_config(tier_model, refine_model=None):
+def deploy_config(tier_model, refine_size=None):
     config_path = DIR / 'config'
     cfg = (
         f'# airtype 配置\n'
@@ -370,9 +371,10 @@ def deploy_config(tier_model, refine_model=None):
         f'LANG="zh"\n'
         f'THREADS=4\n'
     )
-    if refine_model:
+    if refine_size:
+        filename = f'Qwen2.5-{refine_size}-Instruct-Q4_K_M.gguf'
         cfg += (
-            f'REFINE_MODEL="{refine_model}"\n'
+            f'REFINE_MODEL="{filename}"\n'
             f'REFINE_THREADS=4\n'
         )
     config_path.write_text(cfg)
@@ -407,18 +409,18 @@ def main():
     detect_system()
     cpu_cores, reco = detect_hardware()
     tier_model, tier_size, tier_name = select_model(reco)
-    refine_model, refine_size, refine_name = select_refine_model(reco)
+    refine_size, refine_size_str, refine_name = select_refine_model(reco)
     install_deps()
     build_sensevoice(cpu_cores)
-    if refine_model:
+    if refine_size:
         build_llama(cpu_cores)
     build_overlay()
     tier_model, tier_size, tier_name = download_model(tier_model, tier_size, tier_name)
-    refine_model, refine_size, refine_name = download_refine_model(refine_model, refine_size, refine_name)
+    refine_size, refine_size_str, refine_name = download_refine_model(refine_size, refine_size_str, refine_name)
     deploy_airtype_script()
-    deploy_config(tier_model, refine_model)
+    deploy_config(tier_model, refine_size)
     check_path()
-    print_done(tier_name, tier_size, refine_name, refine_size)
+    print_done(tier_name, tier_size, refine_name, refine_size_str)
 
 
 if __name__ == '__main__':
