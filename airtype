@@ -43,6 +43,10 @@ REFINE_PROMPT = '''你是语音输入后处理助手。对用户语音识别的�
 REFINE_THREADS = 4
 
 
+# 合法的 ASR 引擎列表，用于配置校验
+_VALID_ASR_ENGINES = ('sensevoice', 'qwen3asr', 'funasr')
+
+
 def load_config():
     """从 config 文件加载配置。config 格式为 KEY=VALUE，支持引号和注释。"""
     global ASR_ENGINE, MODEL, MAX_SECONDS, LANG, THREADS
@@ -57,7 +61,11 @@ def load_config():
             if '=' in line:
                 k, v = line.split('=', 1)
                 k, v = k.strip(), v.strip().strip('"').strip("'")
-                if k == 'ASR_ENGINE':      ASR_ENGINE = v
+                if k == 'ASR_ENGINE':
+                    if v in _VALID_ASR_ENGINES:
+                        ASR_ENGINE = v
+                    else:
+                        log(f'! 未知的 ASR_ENGINE: {v}，使用默认值: {ASR_ENGINE}')
                 elif k == 'MODEL':         MODEL = v
                 elif k == 'MAX_SECONDS':   MAX_SECONDS = int(v)
                 elif k == 'LANG':          LANG = v
@@ -178,10 +186,16 @@ def run_asr(audio_path):
     """
     model_path = DIR / 'models' / MODEL
 
+    # 统一检查：模型文件是否存在
+    if not model_path.is_file():
+        log(f'! 模型文件不存在: {model_path}')
+        return ''
+
     if ASR_ENGINE == 'sensevoice':
         # --- SenseVoice.cpp: 非自回归，速度最快 ---
         engine = DIR / 'SenseVoice.cpp' / 'build' / 'bin' / 'sense-voice-main'
         if not engine.is_file():
+            log(f'! SenseVoice 引擎不存在: {engine}')
             return ''
         cmd = [str(engine), '-m', str(model_path), '-l', LANG,
                '--use-itn', '-t', str(THREADS), str(audio_path)]
@@ -190,6 +204,7 @@ def run_asr(audio_path):
         # --- transcribe.cpp: 自回归，准确率更高 ---
         engine = DIR / 'transcribe.cpp' / 'build' / 'bin' / 'transcribe'
         if not engine.is_file():
+            log(f'! transcribe.cpp 引擎不存在: {engine}')
             return ''
         cmd = [str(engine), '-m', str(model_path),
                '-t', str(THREADS), str(audio_path)]
@@ -198,7 +213,11 @@ def run_asr(audio_path):
         # --- llama-funasr-cli: Fun-ASR-Nano 官方 runtime ---
         engine = DIR / 'Fun-ASR' / 'runtime' / 'llama.cpp' / 'build' / 'bin' / 'llama-funasr-cli'
         enc_model = DIR / 'models' / 'funasr-encoder-f16.gguf'
-        if not engine.is_file() or not enc_model.is_file():
+        if not engine.is_file():
+            log(f'! FunASR 引擎不存在: {engine}')
+            return ''
+        if not enc_model.is_file():
+            log(f'! FunASR encoder 不存在: {enc_model}')
             return ''
         cmd = [str(engine), '--enc', str(enc_model), '-m', str(model_path),
                '-t', str(THREADS), '-a', str(audio_path)]
@@ -208,6 +227,11 @@ def run_asr(audio_path):
         return ''
 
     r = subprocess.run(cmd, capture_output=True, text=True, check=False)
+
+    # 记录 stderr 以便调试（不阻塞主流程）
+    if r.returncode != 0 and r.stderr:
+        log(f'! ASR 错误 ({ASR_ENGINE}): {r.stderr[:200]}')
+
     return r.stdout.strip() if r.stdout else ''
 
 

@@ -69,6 +69,23 @@ def test_load_config_from_file():
         os.unlink(tmp_path)
 
 
+def test_invalid_asr_engine():
+    """测试非法 ASR_ENGINE 值被拒绝，保留默认值."""
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.cfg', delete=False) as f:
+        f.write('ASR_ENGINE="typo_engine"\n')
+        tmp_path = f.name
+
+    try:
+        mod = _load_module(config_path=tmp_path)
+        mod.load_config()
+        # 非法值应被拒绝，保留默认值 sensevoice
+        assert mod.ASR_ENGINE == 'sensevoice', \
+            f"非法 ASR_ENGINE 应保留默认值 sensevoice，实际为 {mod.ASR_ENGINE}"
+        print('✓ 非法 ASR_ENGINE 校验正确')
+    finally:
+        os.unlink(tmp_path)
+
+
 def test_parse_output():
     """测试 ASR 输出解析函数."""
     mod = _load_module()
@@ -85,5 +102,6 @@ def test_parse_output():
 if __name__ == '__main__':
     test_load_config_defaults()
     test_load_config_from_file()
+    test_invalid_asr_engine()
     test_parse_output()
     print('\n所有配置测试通过 ✓')
