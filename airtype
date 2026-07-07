@@ -128,6 +128,9 @@ def parse_output(raw):
         if line:
             lines.append(line)
     text = ' '.join(lines)
+    # 清理可能导致浏览器跳转或输入异常的控制字符
+    text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text)  # 保留 \t \n \r，后面单独处理
+    text = text.replace('\n', ' ').replace('\r', '').replace('\t', ' ')
     return re.sub(r' +', ' ', text).strip()
 
 
@@ -266,11 +269,29 @@ def main():
             show_error('Clipboard copy failed')
     else:
         kill_overlay()
-        r = subprocess.run(['wtype', '--', text], check=False)
-        if r.returncode != 0:
-            log(f'! wtype 失败: exit={r.returncode}')
-        else:
-            log('已输入')
+        time.sleep(0.1)  # 等待焦点回到目标窗口
+        # 清理文本中可能导致浏览器跳转的控制字符
+        text = text.replace('\n', ' ').replace('\r', '').replace('\t', ' ')
+        # 用剪贴板 + 模拟粘贴键代替 wtype 直接输入，避免浏览器跳转和输入法冲突
+        pasted = False
+        # Step 1: 复制到剪贴板
+        if copy_to_clipboard(text):
+            time.sleep(0.05)  # 等待剪贴板就绪
+            # Step 2: 模拟 Ctrl+V 粘贴 (通过 wtype 发送快捷键)
+            r = subprocess.run(['wtype', '-M', 'ctrl', 'v', '-m', 'ctrl'], check=False)
+            if r.returncode == 0:
+                log('已粘贴输入')
+                pasted = True
+            else:
+                log(f'! wtype 粘贴失败: exit={r.returncode}')
+        if not pasted:
+            # 回退: 直接用 wtype 输入 (去掉换行符以防万一)
+            safe_text = text.replace('\n', ' ').replace('\r', '')
+            r = subprocess.run(['wtype', '--', safe_text], check=False)
+            if r.returncode != 0:
+                log(f'! wtype 失败: exit={r.returncode}')
+            else:
+                log('已输入 (回退模式)')
 
 
 def _handle_signal(signum, frame):
