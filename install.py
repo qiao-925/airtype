@@ -326,14 +326,15 @@ def download_model(tier_model, tier_size, tier_name):
 def download_refine_model(refine_size, refine_size_str, refine_name):
     if not refine_size:
         return refine_size, refine_size_str, refine_name
-    filename = f'Qwen2.5-{refine_size}-Instruct-Q4_K_M.gguf'
+    filename = f'qwen2.5-{refine_size.lower()}-instruct-q4_k_m.gguf'
+    repo = f'Qwen/Qwen2.5-{refine_size}-Instruct-GGUF'
     MODEL_DIR = DIR / 'models'
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
     model_file = MODEL_DIR / filename
     if model_file.is_file():
         info(f'模型已存在: {filename}')
         return refine_size, refine_size_str, refine_name
-    url = f'https://huggingface.co/bartowski/Qwen2.5-{refine_size}-Instruct-GGUF/resolve/main/{filename}'
+    url = f'https://huggingface.co/{repo}/resolve/main/{filename}'
     info(f'下载模型 {filename} ({refine_size_str}) …')
     ok = download(url, str(model_file), f'下载 {refine_name}')
     if not ok:
@@ -372,7 +373,7 @@ def deploy_config(tier_model, refine_size=None):
         f'THREADS=4\n'
     )
     if refine_size:
-        filename = f'Qwen2.5-{refine_size}-Instruct-Q4_K_M.gguf'
+        filename = f'qwen2.5-{refine_size.lower()}-instruct-q4_k_m.gguf'
         cfg += (
             f'REFINE_MODEL="{filename}"\n'
             f'REFINE_THREADS=4\n'
