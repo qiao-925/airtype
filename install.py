@@ -7,10 +7,16 @@ from pathlib import Path
 APP = 'airtype'
 DIR = Path.home() / '.local' / 'share' / APP
 BIN = Path.home() / '.local' / 'bin'
-REPO_SENSEVOICE = 'https://github.com/lovemefan/SenseVoice.cpp'
-REPO_LLAMA = 'https://github.com/ggml-org/llama.cpp'
+# ========== 代码仓库地址 ==========
+REPO_SENSEVOICE = 'https://github.com/lovemefan/SenseVoice.cpp'   # SenseVoice ASR 引擎
+REPO_TRANSCRIBE = 'https://github.com/handy-computer/transcribe.cpp'  # Qwen3-ASR 引擎
+REPO_FUNASR = 'https://github.com/FunAudioLLM/Fun-ASR'            # Fun-ASR-Nano 引擎
+REPO_LLAMA = 'https://github.com/ggml-org/llama.cpp'              # 后处理 LLM 引擎
 REPO_BASE = 'https://raw.githubusercontent.com/qiao-925/airtype/master'
-MODEL_BASE = 'https://huggingface.co/lovemefan/sense-voice-gguf/resolve/main'
+
+# ========== 模型下载地址 ==========
+MODEL_BASE = 'https://huggingface.co/lovemefan/sense-voice-gguf/resolve/main'  # SenseVoice 模型
+QWEN35_BASE = 'https://huggingface.co/unsloth'                    # Qwen3.5 后处理模型
 STB_URL = 'https://raw.githubusercontent.com/nothings/stb/master/stb_truetype.h'
 
 RED = '\033[0;31m'; GREEN = '\033[0;32m'; YELLOW = '\033[1;33m'; CYAN = '\033[0;36m'; NC = '\033[0m'
@@ -139,14 +145,15 @@ MODELS = {
 # 硬件等级 → MODELS 字典 key
 RECO_KEY = {4: '2', 5: '6', 8: '8'}
 
+# ========== 后处理模型选项（Qwen3.5 系列） ==========
+# 元组格式：(size标识, 文件大小, 显示名, repo名)
 REFINE_MODELS = {
     '0': (None,      '0 MB',     '跳过',   ''),
-    '1': ('0.5B',    '469 MB',   '0.5B',   'Qwen2.5-0.5B'),
-    '2': ('1.5B',    '1066 MB',  '1.5B',   'Qwen2.5-1.5B'),
-    '3': ('3B',      '2007 MB',  '3B',     'Qwen2.5-3B'),
+    '1': ('0.8B',    '~500 MB',  '0.8B',   'Qwen3.5-0.8B'),
+    '2': ('2B',      '~1.2 GB',  '2B',     'Qwen3.5-2B'),
 }
 
-# 硬件等级 → REFINE_MODELS 字典 key
+# 硬件等级 → REFINE_MODELS 字典 key（低配跳过，中高配推荐 0.8B）
 REFINE_RECO_KEY = {4: '0', 5: '1', 8: '1'}
 
 
@@ -184,16 +191,46 @@ def select_model(reco):
     return tier_model, tier_size, tier_name
 
 
+# ========== ASR 引擎选项 ==========
+# 元组格式：(引擎标识, 显示名, 特点)
+ASR_ENGINES = {
+    '1': ('sensevoice', 'SenseVoice', '速度最快，延迟最低，5种语言'),
+    '2': ('qwen3asr',   'Qwen3-ASR',  '准确率更高，52语言，22种方言'),
+    '3': ('funasr',     'Fun-ASR-Nano', '方言支持好，官方llama.cpp runtime'),
+}
+
+
+def select_asr_engine():
+    """让用户选择 ASR 语音识别引擎。"""
+    print()
+    print('  ASR 语音识别引擎:')
+    print()
+    print('  ID  引擎            特点')
+    print('  ──  ──────────────  ─────────────────────────────────')
+    print('  1   SenseVoice      ★ 速度最快，延迟最低，5种语言')
+    print('  2   Qwen3-ASR       准确率更高，52语言，22种中文方言')
+    print('  3   Fun-ASR-Nano    方言支持好，官方 llama.cpp runtime')
+    print()
+
+    choice = ask('  输入 ID 确认或回车使用推荐 [ID 1]: ')
+
+    if choice == '' or choice not in ASR_ENGINES:
+        choice = '1'
+    engine_id, engine_name, engine_desc = ASR_ENGINES[choice]
+    info(f'选定: {engine_name} — {engine_desc}')
+    return engine_id
+
+
 def select_refine_model(reco):
+    """让用户选择后处理润色模型。"""
     print()
-    print('  Qwen2.5-Instruct 后处理模型 (可选，润色识别结果):')
+    print('  Qwen3.5 后处理模型 (可选，润色识别结果):')
     print()
-    print('  ID  模型                   大小      延迟     备注')
-    print('  ──  ─────────────────────  ────────  ──────  ──────────────')
-    print('  0   跳过（不使用后处理）     0 MB     0s      纯 STT 输出')
-    print('  1   Qwen2.5-0.5B Q4_K_M    469 MB   2-4s    ★ 推荐，轻量')
-    print('  2   Qwen2.5-1.5B Q4_K_M    1066 MB  3-8s    更强纠错')
-    print('  3   Qwen2.5-3B  Q4_K_M     2007 MB  6-15s   最强，较慢')
+    print('  ID  模型                大小       延迟     备注')
+    print('  ──  ──────────────────  ─────────  ──────  ──────────────')
+    print('  0   跳过（不使用后处理）  0 MB      0s      纯 ASR 输出')
+    print('  1   Qwen3.5-0.8B Q4_K   ~500 MB   2-4s    ★ 推荐，轻量')
+    print('  2   Qwen3.5-2B   Q4_K   ~1.2 GB   4-10s   更强纠错')
     print()
 
     reco_key = REFINE_RECO_KEY.get(reco, '0')
@@ -272,6 +309,51 @@ def build_llama(cpu_cores):
     info('llama.cpp 编译完成')
 
 
+def build_transcribe(cpu_cores):
+    """编译 transcribe.cpp（Qwen3-ASR 引擎）。"""
+    TRANSCRIBE_DIR = DIR / 'transcribe.cpp'
+    TRANSCRIBE_BIN = TRANSCRIBE_DIR / 'build' / 'bin' / 'transcribe'
+    if TRANSCRIBE_BIN.is_file():
+        info('transcribe.cpp 已就绪')
+        return
+    info('克隆并编译 transcribe.cpp (3-10 分钟) …')
+    DIR.mkdir(parents=True, exist_ok=True)
+    if not TRANSCRIBE_DIR.is_dir():
+        run(['git', 'clone', '--depth', '1', REPO_TRANSCRIBE, str(TRANSCRIBE_DIR)])
+    build_dir = TRANSCRIBE_DIR / 'build'
+    build_dir.mkdir(parents=True, exist_ok=True)
+    if shutil.which('nvcc'):
+        info('启用 CUDA GPU 加速')
+        run(['cmake', '-DCMAKE_BUILD_TYPE=Release', '-DGGML_CUDA=ON', '..'], cwd=str(build_dir))
+    else:
+        run(['cmake', '-DCMAKE_BUILD_TYPE=Release', '..'], cwd=str(build_dir))
+    run(['make', f'-j{cpu_cores}'], cwd=str(build_dir))
+    info('transcribe.cpp 编译完成')
+
+
+def build_funasr(cpu_cores):
+    """编译 Fun-ASR-Nano 的 llama.cpp runtime。"""
+    FUNASR_DIR = DIR / 'Fun-ASR'
+    FUNASR_BIN = FUNASR_DIR / 'runtime' / 'llama.cpp' / 'build' / 'bin' / 'llama-funasr-cli'
+    if FUNASR_BIN.is_file():
+        info('Fun-ASR runtime 已就绪')
+        return
+    info('克隆并编译 Fun-ASR runtime (3-10 分钟) …')
+    DIR.mkdir(parents=True, exist_ok=True)
+    if not FUNASR_DIR.is_dir():
+        run(['git', 'clone', '--depth', '1', REPO_FUNASR, str(FUNASR_DIR)])
+    llama_dir = FUNASR_DIR / 'runtime' / 'llama.cpp'
+    build_dir = llama_dir / 'build'
+    build_dir.mkdir(parents=True, exist_ok=True)
+    if shutil.which('nvcc'):
+        info('启用 CUDA GPU 加速')
+        run(['cmake', '-DCMAKE_BUILD_TYPE=Release', '-DGGML_CUDA=ON', '..'], cwd=str(build_dir))
+    else:
+        run(['cmake', '-DCMAKE_BUILD_TYPE=Release', '..'], cwd=str(build_dir))
+    run(['make', f'-j{cpu_cores}'], cwd=str(build_dir))
+    info('Fun-ASR runtime 编译完成')
+
+
 def build_overlay():
     OVERLAY_BIN = DIR / 'voice-overlay'
     if OVERLAY_BIN.is_file():
@@ -324,10 +406,11 @@ def download_model(tier_model, tier_size, tier_name):
 
 
 def download_refine_model(refine_size, refine_size_str, refine_name):
+    """下载 Qwen3.5 后处理模型 GGUF 文件。"""
     if not refine_size:
         return refine_size, refine_size_str, refine_name
-    filename = f'qwen2.5-{refine_size.lower()}-instruct-q4_k_m.gguf'
-    repo = f'Qwen/Qwen2.5-{refine_size}-Instruct-GGUF'
+    filename = f'Qwen3.5-{refine_size}-Q4_K_M.gguf'
+    repo = f'unsloth/Qwen3.5-{refine_size}-GGUF'
     MODEL_DIR = DIR / 'models'
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
     model_file = MODEL_DIR / filename
@@ -363,18 +446,24 @@ def deploy_airtype_script():
     info(f'airtype → {dst}')
 
 
-def deploy_config(tier_model, refine_size=None):
+def deploy_config(asr_engine, tier_model, refine_size=None):
+    """生成 airtype 配置文件。"""
     config_path = DIR / 'config'
     cfg = (
         f'# airtype 配置\n'
+        f'\n'
+        f'# ASR 语音识别引擎: sensevoice | qwen3asr | funasr\n'
+        f'ASR_ENGINE="{asr_engine}"\n'
         f'MODEL="{tier_model}"\n'
         f'MAX_SECONDS=3600\n'
         f'LANG="zh"\n'
         f'THREADS=4\n'
     )
     if refine_size:
-        filename = f'qwen2.5-{refine_size.lower()}-instruct-q4_k_m.gguf'
+        filename = f'Qwen3.5-{refine_size}-Q4_K_M.gguf'
         cfg += (
+            f'\n'
+            f'# 后处理润色模型（留空则跳过）\n'
             f'REFINE_MODEL="{filename}"\n'
             f'REFINE_THREADS=4\n'
         )
@@ -409,17 +498,79 @@ def main():
     banner()
     detect_system()
     cpu_cores, reco = detect_hardware()
-    tier_model, tier_size, tier_name = select_model(reco)
+
+    # 第一步：选择 ASR 引擎
+    asr_engine = select_asr_engine()
+
+    # 第二步：选择 ASR 模型（根据引擎显示不同选项）
+    if asr_engine == 'sensevoice':
+        tier_model, tier_size, tier_name = select_model(reco)
+    elif asr_engine == 'qwen3asr':
+        # Qwen3-ASR 使用社区 GGUF，目前只有 0.6B Q4_K_M
+        tier_model = 'Qwen3-ASR-0.6B-Q4_K_M.gguf'
+        tier_size, tier_name = '~940 MB', 'Qwen3-ASR-0.6B'
+        info(f'Qwen3-ASR 模型: {tier_name} ({tier_size})')
+    elif asr_engine == 'funasr':
+        # Fun-ASR-Nano 使用 encoder + decoder 双文件
+        tier_model = 'qwen3-0.6b-q4km.gguf'
+        tier_size, tier_name = '~950 MB', 'Fun-ASR-Nano'
+        info(f'Fun-ASR-Nano 模型: encoder + {tier_model} ({tier_size})')
+    else:
+        err(f'未知的 ASR 引擎: {asr_engine}')
+
+    # 第三步：选择后处理模型
     refine_size, refine_size_str, refine_name = select_refine_model(reco)
+
+    # 第四步：安装系统依赖
     install_deps()
-    build_sensevoice(cpu_cores)
+
+    # 第五步：编译对应的 runtime
+    if asr_engine == 'sensevoice':
+        build_sensevoice(cpu_cores)
+    elif asr_engine == 'qwen3asr':
+        build_transcribe(cpu_cores)
+    elif asr_engine == 'funasr':
+        build_funasr(cpu_cores)
+
     if refine_size:
         build_llama(cpu_cores)
+
     build_overlay()
-    tier_model, tier_size, tier_name = download_model(tier_model, tier_size, tier_name)
+
+    # 第六步：下载模型文件
+    MODEL_DIR = DIR / 'models'
+    MODEL_DIR.mkdir(parents=True, exist_ok=True)
+
+    if asr_engine == 'sensevoice':
+        tier_model, tier_size, tier_name = download_model(tier_model, tier_size, tier_name)
+    elif asr_engine == 'qwen3asr':
+        # 下载 Qwen3-ASR GGUF 模型
+        model_file = MODEL_DIR / tier_model
+        if not model_file.is_file():
+            url = f'https://huggingface.co/ggml-org/Qwen3-ASR-0.6B-GGUF/resolve/main/{tier_model}'
+            download(url, str(model_file), f'下载 {tier_name}')
+        else:
+            info(f'模型已存在: {tier_model}')
+    elif asr_engine == 'funasr':
+        # 下载 Fun-ASR-Nano encoder 和 decoder
+        enc_file = MODEL_DIR / 'funasr-encoder-f16.gguf'
+        dec_file = MODEL_DIR / tier_model
+        if not enc_file.is_file():
+            url = 'https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-GGUF/resolve/main/funasr-encoder-f16.gguf'
+            download(url, str(enc_file), '下载 FunASR encoder')
+        else:
+            info('encoder 已存在')
+        if not dec_file.is_file():
+            url = f'https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-GGUF/resolve/main/{tier_model}'
+            download(url, str(dec_file), f'下载 FunASR decoder')
+        else:
+            info(f'decoder 已存在: {tier_model}')
+
     refine_size, refine_size_str, refine_name = download_refine_model(refine_size, refine_size_str, refine_name)
+
+    # 第七步：部署配置
     deploy_airtype_script()
-    deploy_config(tier_model, refine_size)
+    deploy_config(asr_engine, tier_model, refine_size)
     check_path()
     print_done(tier_name, tier_size, refine_name, refine_size_str)
 
