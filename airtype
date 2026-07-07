@@ -15,10 +15,13 @@ MODEL = 'sense-voice-small-q5_k.gguf'
 MAX_SECONDS = 3600
 LANG = 'zh'
 THREADS = 4
+REFINE_MODEL = ''
+REFINE_PROMPT = '你是语音输入后处理助手。去除语气词（嗯、啊、那个），修正识别错误，补全标点。只输出修正后的文本。'
+REFINE_THREADS = 4
 
 
 def load_config():
-    global MODEL, MAX_SECONDS, LANG, THREADS
+    global MODEL, MAX_SECONDS, LANG, THREADS, REFINE_MODEL, REFINE_PROMPT, REFINE_THREADS
     if not CONFIG.is_file():
         return
     try:
@@ -33,6 +36,9 @@ def load_config():
                 elif k == 'MAX_SECONDS': MAX_SECONDS = int(v)
                 elif k == 'LANG':      LANG = v
                 elif k == 'THREADS':   THREADS = int(v)
+                elif k == 'REFINE_MODEL':   REFINE_MODEL = v
+                elif k == 'REFINE_PROMPT':  REFINE_PROMPT = v
+                elif k == 'REFINE_THREADS': REFINE_THREADS = int(v)
     except Exception as e:
         log(f'! 配置解析错误: {e}')
 
@@ -132,6 +138,22 @@ def parse_output(raw):
     text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text)  # 保留 \t \n \r，后面单独处理
     text = text.replace('\n', ' ').replace('\r', '').replace('\t', ' ')
     return re.sub(r' +', ' ', text).strip()
+
+
+def run_refine(text):
+    """调用 llama-cli 后处理润色."""
+    llama = DIR / 'llama.cpp' / 'build' / 'bin' / 'llama-cli'
+    model = DIR / 'models' / REFINE_MODEL
+    if not llama.is_file() or not model.is_file():
+        return None
+    prompt = f'{REFINE_PROMPT}\n\n{text}'
+    r = subprocess.run(
+        [str(llama), '-m', str(model), '-p', prompt,
+         '-n', '512', '-t', str(REFINE_THREADS),
+         '--no-display-prompt', '--log-disable'],
+        capture_output=True, text=True, check=False, timeout=30)
+    out = r.stdout.strip() if r.stdout else ''
+    return out if out else None
 
 
 def main():
@@ -256,6 +278,13 @@ def main():
         sys.exit(0)
 
     log(f'识别完成: {text}')
+
+    # --- 后处理润色 ---
+    if REFINE_MODEL:
+        refined = run_refine(text)
+        if refined:
+            log(f'润色完成: {refined}')
+            text = refined
 
     if args.clipboard:
         ok = copy_to_clipboard(text)

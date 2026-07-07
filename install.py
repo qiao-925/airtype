@@ -8,8 +8,10 @@ APP = 'airtype'
 DIR = Path.home() / '.local' / 'share' / APP
 BIN = Path.home() / '.local' / 'bin'
 REPO_SENSEVOICE = 'https://github.com/lovemefan/SenseVoice.cpp'
+REPO_LLAMA = 'https://github.com/ggml-org/llama.cpp'
 REPO_BASE = 'https://raw.githubusercontent.com/qiao-925/airtype/master'
 MODEL_BASE = 'https://huggingface.co/lovemefan/sense-voice-gguf/resolve/main'
+QWEN_BASE = 'https://huggingface.co/Qwen/Qwen2.5-Instruct-GGUF/resolve/main'
 STB_URL = 'https://raw.githubusercontent.com/nothings/stb/master/stb_truetype.h'
 
 RED = '\033[0;31m'; GREEN = '\033[0;32m'; YELLOW = '\033[1;33m'; CYAN = '\033[0;36m'; NC = '\033[0m'
@@ -138,6 +140,16 @@ MODELS = {
 # 硬件等级 → MODELS 字典 key
 RECO_KEY = {4: '2', 5: '6', 8: '8'}
 
+REFINE_MODELS = {
+    '0': (None,                                  '0 MB',     '跳过'),
+    '1': ('qwen2.5-0.5b-instruct-q4_k_m.gguf', '469 MB',   '0.5B'),
+    '2': ('qwen2.5-1.5b-instruct-q4_k_m.gguf', '1066 MB',  '1.5B'),
+    '3': ('qwen2.5-3b-instruct-q4_k_m.gguf',  '2007 MB',  '3B'),
+}
+
+# 硬件等级 → REFINE_MODELS 字典 key
+REFINE_RECO_KEY = {4: '0', 5: '1', 8: '1'}
+
 
 def select_model(reco):
     print()
@@ -171,6 +183,37 @@ def select_model(reco):
 
     info(f'选定: {tier_name} ({tier_size})')
     return tier_model, tier_size, tier_name
+
+
+def select_refine_model(reco):
+    print()
+    print('  Qwen2.5-Instruct 后处理模型 (可选，润色识别结果):')
+    print()
+    print('  ID  模型                   大小      延迟     备注')
+    print('  ──  ─────────────────────  ────────  ──────  ──────────────')
+    print('  0   跳过（不使用后处理）     0 MB     0s      纯 STT 输出')
+    print('  1   Qwen2.5-0.5B Q4_K_M    469 MB   2-4s    ★ 推荐，轻量')
+    print('  2   Qwen2.5-1.5B Q4_K_M    1066 MB  3-8s    更强纠错')
+    print('  3   Qwen2.5-3B  Q4_K_M     2007 MB  6-15s   最强，较慢')
+    print()
+
+    reco_key = REFINE_RECO_KEY.get(reco, '0')
+    rdef = REFINE_MODELS[reco_key]
+    choice = ask(f'  输入 ID 确认或回车使用推荐 [ID {reco_key}]: ')
+
+    if choice == '':
+        refine_model, refine_size, refine_name = rdef
+    elif choice in REFINE_MODELS:
+        refine_model, refine_size, refine_name = REFINE_MODELS[choice]
+    else:
+        warn(f'无效选项，使用推荐: {rdef[2]}')
+        refine_model, refine_size, refine_name = rdef
+
+    if refine_model:
+        info(f'选定: {refine_name} ({refine_size})')
+    else:
+        info('跳过后处理模型')
+    return refine_model, refine_size, refine_name
 
 
 def install_deps():
@@ -207,6 +250,27 @@ def build_sensevoice(cpu_cores):
         run(['cmake', '-DCMAKE_BUILD_TYPE=Release', '..'], cwd=str(build_dir))
     run(['make', f'-j{cpu_cores}'], cwd=str(build_dir))
     info('SenseVoice.cpp 编译完成')
+
+
+def build_llama(cpu_cores):
+    LLAMA_DIR = DIR / 'llama.cpp'
+    LLAMA_BIN = LLAMA_DIR / 'build' / 'bin' / 'llama-cli'
+    if LLAMA_BIN.is_file():
+        info('llama.cpp 已就绪')
+        return
+    info('克隆并编译 llama.cpp (3-10 分钟) …')
+    DIR.mkdir(parents=True, exist_ok=True)
+    if not LLAMA_DIR.is_dir():
+        run(['git', 'clone', '--depth', '1', REPO_LLAMA, str(LLAMA_DIR)])
+    build_dir = LLAMA_DIR / 'build'
+    build_dir.mkdir(parents=True, exist_ok=True)
+    if shutil.which('nvcc'):
+        info('启用 CUDA GPU 加速')
+        run(['cmake', '-DCMAKE_BUILD_TYPE=Release', '-DGGML_CUDA=ON', '..'], cwd=str(build_dir))
+    else:
+        run(['cmake', '-DCMAKE_BUILD_TYPE=Release', '..'], cwd=str(build_dir))
+    run(['make', f'-j{cpu_cores}'], cwd=str(build_dir))
+    info('llama.cpp 编译完成')
 
 
 def build_overlay():
@@ -260,6 +324,24 @@ def download_model(tier_model, tier_size, tier_name):
     return tier_model, tier_size, tier_name
 
 
+def download_refine_model(refine_model, refine_size, refine_name):
+    if not refine_model:
+        return refine_model, refine_size, refine_name
+    MODEL_DIR = DIR / 'models'
+    MODEL_DIR.mkdir(parents=True, exist_ok=True)
+    model_file = MODEL_DIR / refine_model
+    if model_file.is_file():
+        info(f'模型已存在: {refine_model}')
+        return refine_model, refine_size, refine_name
+    info(f'下载模型 {refine_model} ({refine_size}) …')
+    ok = download(f'{QWEN_BASE}/{refine_model}', str(model_file), f'下载 {refine_name}')
+    if not ok:
+        warn('后处理模型下载失败，跳过后处理')
+        return None, refine_size, refine_name
+    info('模型下载完成')
+    return refine_model, refine_size, refine_name
+
+
 def deploy_airtype_script():
     """部署 airtype 运行时到 ~/.local/bin."""
     BIN.mkdir(parents=True, exist_ok=True)
@@ -279,15 +361,22 @@ def deploy_airtype_script():
     info(f'airtype → {dst}')
 
 
-def deploy_config(tier_model):
+def deploy_config(tier_model, refine_model=None):
     config_path = DIR / 'config'
-    config_path.write_text(
+    cfg = (
         f'# airtype 配置\n'
         f'MODEL="{tier_model}"\n'
         f'MAX_SECONDS=3600\n'
         f'LANG="zh"\n'
         f'THREADS=4\n'
     )
+    if refine_model:
+        cfg += (
+            f'REFINE_MODEL="{refine_model}"\n'
+            f'REFINE_PROMPT="你是语音输入后处理助手。去除语气词（嗯、啊、那个），修正识别错误，补全标点。只输出修正后的文本。"\n'
+            f'REFINE_THREADS=4\n'
+        )
+    config_path.write_text(cfg)
     info(f'配置 → {config_path}')
 
 
@@ -297,13 +386,15 @@ def check_path():
         print(f"  echo 'export PATH=\"$HOME/.local/bin:$PATH\"' >> ~/.bashrc")
 
 
-def print_done(tier_name, tier_size):
+def print_done(tier_name, tier_size, refine_name=None, refine_size=None):
     print()
     print('  ======================================')
     print('   airtype 安装完成')
     print('  ======================================')
     print()
-    print(f'  模型:  {tier_name} ({tier_size})')
+    print(f'  STT 模型:  {tier_name} ({tier_size})')
+    if refine_name:
+        print(f'  后处理模型: {refine_name} ({refine_size})')
     print(f'  配置:  {DIR}/config')
     print(f'  日志:  {DIR}/airtype.log')
     print(f'  使用:  桌面快捷键绑定到 airtype 命令')
@@ -317,14 +408,18 @@ def main():
     detect_system()
     cpu_cores, reco = detect_hardware()
     tier_model, tier_size, tier_name = select_model(reco)
+    refine_model, refine_size, refine_name = select_refine_model(reco)
     install_deps()
     build_sensevoice(cpu_cores)
+    if refine_model:
+        build_llama(cpu_cores)
     build_overlay()
     tier_model, tier_size, tier_name = download_model(tier_model, tier_size, tier_name)
+    refine_model, refine_size, refine_name = download_refine_model(refine_model, refine_size, refine_name)
     deploy_airtype_script()
-    deploy_config(tier_model)
+    deploy_config(tier_model, refine_model)
     check_path()
-    print_done(tier_name, tier_size)
+    print_done(tier_name, tier_size, refine_name, refine_size)
 
 
 if __name__ == '__main__':
