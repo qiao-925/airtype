@@ -5,16 +5,32 @@ import os, re, sys, time, signal, shutil, argparse, subprocess
 from pathlib import Path
 
 DIR = Path.home() / '.local' / 'share' / 'airtype'
-CONFIG = DIR / 'config'
+# 支持 AIRTYPE_CONFIG 环境变量覆盖配置文件路径（用于测试）
+CONFIG = Path(os.environ.get('AIRTYPE_CONFIG', str(DIR / 'config')))
 LOG = DIR / 'airtype.log'
 LOCK = Path('/tmp/airtype.lock')
 PIDFILE = Path('/tmp/airtype-overlay.pid')
 STARTFILE = Path('/tmp/airtype-start-time')
 
+# ========== ASR 语音识别引擎配置 ==========
+# ASR_ENGINE: 语音识别引擎，可选值：
+#   "sensevoice" — SenseVoice.cpp（默认，速度最快，延迟最低）
+#   "qwen3asr"   — transcribe.cpp + Qwen3-ASR（准确率更高，52语言）
+#   "funasr"     — llama-funasr-cli + Fun-ASR-Nano（方言支持好）
+ASR_ENGINE = 'sensevoice'
+
+# MODEL: ASR 模型文件名，需与 ASR_ENGINE 匹配
 MODEL = 'sense-voice-small-q5_k.gguf'
+
 MAX_SECONDS = 3600
 LANG = 'zh'
 THREADS = 4
+
+# ========== 后处理润色模型配置 ==========
+# REFINE_MODEL: 后处理模型文件名，为空则跳过后处理
+# 可选值：
+#   "Qwen3.5-0.8B-Q4_K_M.gguf" — 轻量，延迟低（推荐）
+#   "Qwen3.5-2B-Q4_K_M.gguf"   — 更强，延迟稍高
 REFINE_MODEL = ''
 REFINE_PROMPT = '''你是语音输入后处理助手。对用户语音识别的原始文本做如下处理：
 1. 去除填充词和语气词（嗯、啊、那个、就是说、你知道的、然后、对吧）
@@ -28,7 +44,9 @@ REFINE_THREADS = 4
 
 
 def load_config():
-    global MODEL, MAX_SECONDS, LANG, THREADS, REFINE_MODEL, REFINE_PROMPT, REFINE_THREADS
+    """从 config 文件加载配置。config 格式为 KEY=VALUE，支持引号和注释。"""
+    global ASR_ENGINE, MODEL, MAX_SECONDS, LANG, THREADS
+    global REFINE_MODEL, REFINE_PROMPT, REFINE_THREADS
     if not CONFIG.is_file():
         return
     try:
@@ -39,12 +57,13 @@ def load_config():
             if '=' in line:
                 k, v = line.split('=', 1)
                 k, v = k.strip(), v.strip().strip('"').strip("'")
-                if k == 'MODEL':      MODEL = v
-                elif k == 'MAX_SECONDS': MAX_SECONDS = int(v)
-                elif k == 'LANG':      LANG = v
-                elif k == 'THREADS':   THREADS = int(v)
-                elif k == 'REFINE_MODEL':   REFINE_MODEL = v
-                elif k == 'REFINE_PROMPT':  REFINE_PROMPT = v
+                if k == 'ASR_ENGINE':      ASR_ENGINE = v
+                elif k == 'MODEL':         MODEL = v
+                elif k == 'MAX_SECONDS':   MAX_SECONDS = int(v)
+                elif k == 'LANG':          LANG = v
+                elif k == 'THREADS':       THREADS = int(v)
+                elif k == 'REFINE_MODEL':  REFINE_MODEL = v
+                elif k == 'REFINE_PROMPT': REFINE_PROMPT = v
                 elif k == 'REFINE_THREADS': REFINE_THREADS = int(v)
     except Exception as e:
         log(f'! 配置解析错误: {e}')
@@ -147,6 +166,51 @@ def parse_output(raw):
     return re.sub(r' +', ' ', text).strip()
 
 
+def run_asr(audio_path):
+    """
+    ASR 策略函数：根据 ASR_ENGINE 配置选择对应的 runtime 执行语音识别。
+    返回识别出的原始文本，失败返回空字符串。
+
+    支持的引擎：
+    - sensevoice: SenseVoice.cpp（默认，速度快）
+    - qwen3asr:   transcribe.cpp + Qwen3-ASR（准确率高）
+    - funasr:     llama-funasr-cli + Fun-ASR-Nano（方言好）
+    """
+    model_path = DIR / 'models' / MODEL
+
+    if ASR_ENGINE == 'sensevoice':
+        # --- SenseVoice.cpp: 非自回归，速度最快 ---
+        engine = DIR / 'SenseVoice.cpp' / 'build' / 'bin' / 'sense-voice-main'
+        if not engine.is_file():
+            return ''
+        cmd = [str(engine), '-m', str(model_path), '-l', LANG,
+               '--use-itn', '-t', str(THREADS), str(audio_path)]
+
+    elif ASR_ENGINE == 'qwen3asr':
+        # --- transcribe.cpp: 自回归，准确率更高 ---
+        engine = DIR / 'transcribe.cpp' / 'build' / 'bin' / 'transcribe'
+        if not engine.is_file():
+            return ''
+        cmd = [str(engine), '-m', str(model_path),
+               '-t', str(THREADS), str(audio_path)]
+
+    elif ASR_ENGINE == 'funasr':
+        # --- llama-funasr-cli: Fun-ASR-Nano 官方 runtime ---
+        engine = DIR / 'Fun-ASR' / 'runtime' / 'llama.cpp' / 'build' / 'bin' / 'llama-funasr-cli'
+        enc_model = DIR / 'models' / 'funasr-encoder-f16.gguf'
+        if not engine.is_file() or not enc_model.is_file():
+            return ''
+        cmd = [str(engine), '--enc', str(enc_model), '-m', str(model_path),
+               '-t', str(THREADS), '-a', str(audio_path)]
+
+    else:
+        log(f'! 未知的 ASR 引擎: {ASR_ENGINE}')
+        return ''
+
+    r = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    return r.stdout.strip() if r.stdout else ''
+
+
 def run_refine(text):
     """调用 llama-cli 后处理润色."""
     llama = DIR / 'llama.cpp' / 'build' / 'bin' / 'llama-cli'
@@ -211,14 +275,29 @@ def main():
         sys.exit(0)
     log(f'写锁 PID={os.getpid()}')
 
-    sensevoice = DIR / 'SenseVoice.cpp' / 'build' / 'bin' / 'sense-voice-main'
+    # --- 环境检查：根据 ASR 引擎检查对应的 runtime 是否就绪 ---
     model_path = DIR / 'models' / MODEL
 
     checks = [
-        (sensevoice.is_file(), 'STT engine not found'),
         (model_path.is_file(), f'Model not found: {MODEL}'),
         (shutil.which('rec') is not None, 'sox (rec) not installed'),
     ]
+
+    # 检查对应引擎的 runtime 二进制
+    if ASR_ENGINE == 'sensevoice':
+        engine_bin = DIR / 'SenseVoice.cpp' / 'build' / 'bin' / 'sense-voice-main'
+        checks.insert(0, (engine_bin.is_file(), 'SenseVoice engine not found'))
+    elif ASR_ENGINE == 'qwen3asr':
+        engine_bin = DIR / 'transcribe.cpp' / 'build' / 'bin' / 'transcribe'
+        checks.insert(0, (engine_bin.is_file(), 'transcribe.cpp engine not found'))
+    elif ASR_ENGINE == 'funasr':
+        engine_bin = DIR / 'Fun-ASR' / 'runtime' / 'llama.cpp' / 'build' / 'bin' / 'llama-funasr-cli'
+        enc_model = DIR / 'models' / 'funasr-encoder-f16.gguf'
+        checks.insert(0, (engine_bin.is_file(), 'FunASR engine not found'))
+        checks.insert(1, (enc_model.is_file(), 'FunASR encoder not found'))
+    else:
+        show_error(f'Unknown ASR engine: {ASR_ENGINE}')
+        sys.exit(1)
     if not args.clipboard:
         checks.append((shutil.which('wtype') is not None, 'wtype not installed'))
     else:
@@ -230,7 +309,7 @@ def main():
             sys.exit(1)
 
     has_overlay = os.access(DIR / 'voice-overlay', os.X_OK)
-    log(f'overlay={1 if has_overlay else 0} model={MODEL} clipboard={1 if args.clipboard else 0}')
+    log(f'overlay={1 if has_overlay else 0} asr={ASR_ENGINE} model={MODEL} clipboard={1 if args.clipboard else 0}')
 
     global _audio
     _audio = Path(f'/tmp/airtype-input-{os.getpid()}.wav')
@@ -262,15 +341,11 @@ def main():
 
     log(f'录音完成 {sz} bytes')
 
-    # --- STT 推理 ---
+    # --- ASR 语音识别（通过策略函数调用对应引擎） ---
     kill_overlay()
-    log('开始识别')
+    log(f'开始识别 (引擎: {ASR_ENGINE})')
 
-    r = subprocess.run(
-        [str(sensevoice), '-m', str(model_path), '-l', LANG,
-         '--use-itn', '-t', str(THREADS), str(audio)],
-        capture_output=True, text=True, check=False)
-    raw = r.stdout.strip() if r.stdout else ''
+    raw = run_asr(audio)
     log(f'RAW: {raw[:300]}')
 
     audio.unlink(missing_ok=True)
