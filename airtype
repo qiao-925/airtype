@@ -489,7 +489,7 @@ def main():
             show_error('Clipboard copy failed')
     else:
         kill_overlay()
-        time.sleep(0.2)  # 等待焦点回到目标窗口
+        time.sleep(0.5)  # 等待焦点回到目标窗口
         safe_text = text.replace('\n', ' ').replace('\r', '').replace('\t', ' ')
         log(f'字符输入 ({len(safe_text)} 字符)...')
         r = subprocess.run(['wtype', '--', safe_text], check=False)
