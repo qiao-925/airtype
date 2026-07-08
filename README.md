@@ -4,13 +4,6 @@
 
 极简 Linux 全局语音输入法。快捷键触发 → 录音 → 本地 STT 推理 → 键盘输入。完全本地，零网络依赖。
 
-## 特性
-
-- **可插拔 ASR 引擎**：SenseVoice / Qwen3-ASR / Fun-ASR-Nano，配置切换
-- **后处理润色**：可选 Qwen3.5 LLM 对识别结果做纠错、去语气词、补标点
-- **极简部署**：单 config 文件驱动，安装脚本自动编译和下载
-- **完全本地**：所有推理在本地 CPU/GPU 完成，零网络依赖
-
 ## 安装
 
 ```bash
@@ -22,6 +15,13 @@ curl -fsSL https://raw.githubusercontent.com/qiao-925/airtype/master/install.py 
 2. ASR 模型量化等级
 3. 后处理润色模型（可跳过）
 
+## 特性
+
+- **可插拔 ASR 引擎**：SenseVoice / Qwen3-ASR / Fun-ASR-Nano，配置切换
+- **后处理润色**：可选 Qwen3.5 LLM 对识别结果做纠错、去语气词、补标点
+- **极简部署**：单 config 文件驱动，安装脚本自动编译和下载
+- **完全本地**：所有推理在本地 CPU/GPU 完成，零网络依赖
+
 ## 快捷键绑定
 
 绑定桌面快捷键到 `airtype` 命令，推荐 `Alt+V`。
@@ -30,23 +30,6 @@ curl -fsSL https://raw.githubusercontent.com/qiao-925/airtype/master/install.py 
 按 Alt+V → ● listening（开始录音）
   ├─ 说话
   └─ 再按 Alt+V → 文字出现在光标位置
-```
-
-## 配置
-
-配置文件位于 `~/.local/share/airtype/config`，修改后下次运行生效。
-
-```ini
-# ASR 语音识别引擎: sensevoice | qwen3asr | funasr
-ASR_ENGINE="sensevoice"
-MODEL="sense-voice-small-q5_k.gguf"
-MAX_SECONDS=3600
-LANG="zh"
-THREADS=4
-
-# 后处理润色模型（留空则跳过）
-REFINE_MODEL="Qwen3.5-0.8B-Q4_K_M.gguf"
-REFINE_THREADS=4
 ```
 
 ### ASR 引擎
@@ -91,20 +74,6 @@ airtype (Python, ~300 行)
 ```bash
 python3 tests/test_config.py    # 配置解析测试
 python3 tests/test_asr.py       # ASR 策略函数测试
-```
-
-## 目录结构
-
-```
-~/.local/share/airtype/
-  config                              # 配置文件
-  airtype.log                         # 运行日志
-  voice-overlay                       # 状态 overlay
-  SenseVoice.cpp/build/bin/           # ASR 引擎: SenseVoice
-  transcribe.cpp/build/bin/           # ASR 引擎: Qwen3-ASR
-  Fun-ASR/runtime/llama.cpp/build/bin/ # ASR 引擎: Fun-ASR-Nano
-  llama.cpp/build/bin/                # 后处理 LLM 引擎
-  models/                             # 模型文件（GGUF）
 ```
 
 ## Ack

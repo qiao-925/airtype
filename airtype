@@ -26,21 +26,10 @@ MAX_SECONDS = 3600
 LANG = 'zh'
 THREADS = 4
 
-# ========== 后处理润色模型配置 ==========
-# REFINE_MODEL: 后处理模型文件名，为空则跳过后处理
-# 可选值：
-#   "Qwen3.5-0.8B-Q4_K_M.gguf" — 轻量，延迟低（推荐）
-#   "Qwen3.5-2B-Q4_K_M.gguf"   — 更强，延迟稍高
-REFINE_MODEL = ''
-REFINE_PROMPT = '''你是语音输入后处理助手。对用户语音识别的原始文本做如下处理：
-1. 去除填充词和语气词（嗯、啊、那个、就是说、你知道的、然后、对吧）
-2. 去除重复词句（如"今天今天天气不错"→"今天天气不错"）
-3. 识别自我纠正（如"明天，不对，后天"→"后天"），只保留最终意图
-4. 修正明显的识别错误，补全标点符号
-5. 如有列表或步骤，整理为结构化文本
-6. 保持原意，语言简洁自然，不要添加原文没有的内容
-只输出修正后的文本，不要解释。'''
-REFINE_THREADS = 4
+# ========== 后处理规则配置 ==========
+# 使用纯规则替换文本润色（去语气词、去重复、自我纠正、补标点）
+# 零模型依赖、零延迟、零磁盘额外开销
+ENABLE_RULES = True
 
 
 # 合法的 ASR 引擎列表，用于配置校验
@@ -50,7 +39,6 @@ _VALID_ASR_ENGINES = ('sensevoice', 'qwen3asr', 'funasr')
 def load_config():
     """从 config 文件加载配置。config 格式为 KEY=VALUE，支持引号和注释。"""
     global ASR_ENGINE, MODEL, MAX_SECONDS, LANG, THREADS
-    global REFINE_MODEL, REFINE_PROMPT, REFINE_THREADS
     if not CONFIG.is_file():
         return
     try:
@@ -70,9 +58,6 @@ def load_config():
                 elif k == 'MAX_SECONDS':   MAX_SECONDS = int(v)
                 elif k == 'LANG':          LANG = v
                 elif k == 'THREADS':       THREADS = int(v)
-                elif k == 'REFINE_MODEL':  REFINE_MODEL = v
-                elif k == 'REFINE_PROMPT': REFINE_PROMPT = v
-                elif k == 'REFINE_THREADS': REFINE_THREADS = int(v)
     except Exception as e:
         log(f'! 配置解析错误: {e}')
 
@@ -235,20 +220,112 @@ def run_asr(audio_path):
     return r.stdout.strip() if r.stdout else ''
 
 
-def run_refine(text):
-    """调用 llama-cli 后处理润色."""
-    llama = DIR / 'llama.cpp' / 'build' / 'bin' / 'llama-cli'
-    model = DIR / 'models' / REFINE_MODEL
-    if not llama.is_file() or not model.is_file():
-        return None
-    prompt = f'{REFINE_PROMPT}\n\n{text}'
-    r = subprocess.run(
-        [str(llama), '-m', str(model), '-p', prompt,
-         '-n', '512', '-t', str(REFINE_THREADS),
-         '--no-display-prompt', '--log-disable'],
-        capture_output=True, text=True, check=False, timeout=30)
-    out = r.stdout.strip() if r.stdout else ''
-    return out if out else None
+def refine_by_rules(text):
+    """
+    基于规则的后处理：去填充词、去重复、处理自我纠正、补标点。
+    零模型依赖，纯正则实现。
+    """
+    if not text:
+        return text
+
+    original = text
+    log(f'规则后处理开始: "{text[:80]}"')
+
+    # 1. 去除填充词
+    # 常见的填充词和语气词（按优先级排列）
+    fillers = [
+        r'^嗯[，,、 ]*',            # 句首 "嗯"
+        r'^啊[，,、 ]*',            # 句首 "啊"
+        r'^哦[，,、 ]*',            # 句首 "哦"
+        r'^呃[，,、 ]*',            # 句首 "呃"
+        r'^那个[，,、 ]*',          # 句首 "那个"
+        r'^这个[，,、 ]*',          # 句首 "这个"
+        r'^就是说[，,、 ]*',       # 句首 "就是说"
+        r'^那就是[，,、 ]*',       # 句首 "那就是"
+        r'^然后呢[，,、 ]*',
+
+        # 句中填充词（替换为空格，后续清理）
+        r'[，,]?\s*嗯\s*',
+        r'[，,]?\s*啊\s*',
+        r'[，,]?\s*哦\s*',
+        r'[，,]?\s*那个\s*',
+        r'[，,]?\s*就是说\s*',
+        r'[，,]?\s*那就是\s*',
+        r'[，,]?\s*你知道的\s*',
+        r'[，,]?\s*你知道吧\s*',
+        r'[，,]?\s*对吧\s*',
+        r'[，,]?\s*对不对\s*',
+        r'[，,]?\s*是不是\s*',
+    ]
+    for pat in fillers:
+        text = re.sub(pat, '', text)
+    log(f'  去填充词: "{text[:80]}"')
+
+    # 2. 去除连续重复
+    # 单字重复 2 次以上：今天今天 → 今天
+    text = re.sub(r'(.)\1{2,}', r'\1', text)
+    # 双字及以上重复：不错不错 → 不错 今天今天 → 今天
+    text = re.sub(r'(.{2,6})\1+', r'\1', text)
+    log(f'  去重复: "{text[:80]}"')
+
+    # 3. 自我纠正检测
+    # 模式：前面的内容 + "不对/不是/错了/哦不" + 后面内容 → 只保留后面
+    # 例：明天，不对，后天下午开会 → 后天下午开会
+    text = re.sub(r'.*?(不对|不是|错了|哦不|我的意思是|应该说|更正)[，,。\s]*', '', text)
+    log(f'  自我纠正: "{text[:80]}"')
+
+    # 4. 自动格式化列表/步骤
+    # 将口述的列表、步骤和要点整理成结构化文本
+    # 匹配模式：第一步...第二步... / 首先...然后... / 第一点...第二点...
+    step_pats = [
+        # 第一步...第二步...第三步... → 编号列表
+        (r'(?:第[一二三四五六七八九十]+步)', 'step'),
+        # 首先...然后(接着)...最后... → 序号列表
+        (r'(?:首先|然后|接着|再然后|最后)', 'seq'),
+        # 第[一二三]... → 排序项
+        (r'(?:第[一二三四五六七八九十]+[个项条点])', 'point'),
+        # 一...二...三... / 一是...二是...三是...
+        (r'(?:(?:^|[，,。])一[，,、]|一是|一来|第一[，,、])', 'enum'),
+    ]
+    is_list = False
+    for pat, kind in step_pats:
+        if re.search(pat, text):
+            is_list = True
+            log(f'  检测到列表格式: {kind}')
+            break
+    if is_list:
+        # 按常见分隔符拆分后编号
+        # 先尝试按 "第一步/首先/然后/最后/第一点" 拆分
+        parts = re.split(
+            r'(?:'
+            r'第[一二三四五六七八九十]+步[，,、]?|'
+            r'首先[，,、]?|然后[，,、]?|接着[，,、]?|再然后[，,、]?|最后[，,、]?|'
+            r'第[一二三四五六七八九十]+[个项条点][，,、]?|'
+            r'[；;]'
+            r')',
+            text
+        )
+        parts = [p.strip() for p in parts if p.strip()]
+        if len(parts) >= 2:
+            numbered = [f'{i+1}. {p}' for i, p in enumerate(parts)]
+            text = '；'.join(numbered)
+            log(f'  格式化列表: "{text[:80]}"')
+
+    # 6. 清理多余的空格和标点
+    text = re.sub(r'[，,]{2,}', '，', text)          # 多余逗号
+    text = re.sub(r'[\s]+', '', text)                # 清理所有空格
+
+    # 7. 补标点
+    if text and text[-1] not in '。！？，；：,.;:?!':
+        # 疑问句检测
+        if any(w in text for w in ['吗', '呢', '吧', '什么', '怎么', '如何', '啥', '哪', '呢?']):
+            text += '？'
+        else:
+            text += '。'
+
+    log(f'  补标点: "{text[:80]}"')
+    log(f'规则后处理完成: "{original}" → "{text}"')
+    return text
 
 
 def main():
@@ -385,14 +462,15 @@ def main():
 
     log(f'识别完成: {text}')
 
-    # --- 后处理润色 ---
-    if REFINE_MODEL:
-        refined = run_refine(text)
-        if refined:
-            log(f'润色完成: {refined}')
-            text = refined
+    # --- 后处理润色（规则版） ---
+    log(f'后处理规则: 去填充词 + 去重复 + 自我纠正 + 补标点')
+    text = refine_by_rules(text)
+
+    # --- 输出文本 ---
+    log(f'最终文本: "{text[:100]}"')
 
     if args.clipboard:
+        log('尝试复制到剪贴板...')
         ok = copy_to_clipboard(text)
         if ok:
             log('已复制到剪贴板')
@@ -410,21 +488,26 @@ def main():
         # 用剪贴板 + 模拟粘贴键代替 wtype 直接输入，避免浏览器跳转和输入法冲突
         pasted = False
         # Step 1: 复制到剪贴板
+        log('Step 1: 复制到剪贴板...')
         if copy_to_clipboard(text):
             time.sleep(0.05)  # 等待剪贴板就绪
             # Step 2: 模拟 Ctrl+V 粘贴 (通过 wtype 发送快捷键)
+            log('Step 2: 模拟 Ctrl+V 粘贴...')
             r = subprocess.run(['wtype', '-M', 'ctrl', 'v', '-m', 'ctrl'], check=False)
             if r.returncode == 0:
                 log('已粘贴输入')
                 pasted = True
             else:
-                log(f'! wtype 粘贴失败: exit={r.returncode}')
+                log(f'! wtype 粘贴失败: exit={r.returncode}, stderr={r.stderr}')
+        else:
+            log('! 剪贴板复制失败')
         if not pasted:
             # 回退: 直接用 wtype 输入 (去掉换行符以防万一)
             safe_text = text.replace('\n', ' ').replace('\r', '')
+            log(f'回退: 直接 wtype 输入 ({len(safe_text)} 字符)...')
             r = subprocess.run(['wtype', '--', safe_text], check=False)
             if r.returncode != 0:
-                log(f'! wtype 失败: exit={r.returncode}')
+                log(f'! wtype 失败: exit={r.returncode}, stderr={r.stderr}')
             else:
                 log('已输入 (回退模式)')
 

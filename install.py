@@ -11,7 +11,6 @@ BIN = Path.home() / '.local' / 'bin'
 REPO_SENSEVOICE = 'https://github.com/lovemefan/SenseVoice.cpp'   # SenseVoice ASR 引擎
 REPO_TRANSCRIBE = 'https://github.com/handy-computer/transcribe.cpp'  # Qwen3-ASR 引擎
 REPO_FUNASR = 'https://github.com/FunAudioLLM/Fun-ASR'            # Fun-ASR-Nano 引擎
-REPO_LLAMA = 'https://github.com/ggml-org/llama.cpp'              # 后处理 LLM 引擎
 REPO_BASE = 'https://raw.githubusercontent.com/qiao-925/airtype/master'
 
 # ========== 模型下载地址 ==========
@@ -145,18 +144,6 @@ MODELS = {
 # 硬件等级 → MODELS 字典 key
 RECO_KEY = {4: '2', 5: '6', 8: '8'}
 
-# ========== 后处理模型选项（Qwen3.5 系列） ==========
-# 元组格式：(size标识, 文件大小, 显示名, repo名)
-REFINE_MODELS = {
-    '0': (None,      '0 MB',     '跳过',   ''),
-    '1': ('0.8B',    '~500 MB',  '0.8B',   'Qwen3.5-0.8B'),
-    '2': ('2B',      '~1.2 GB',  '2B',     'Qwen3.5-2B'),
-}
-
-# 硬件等级 → REFINE_MODELS 字典 key（低配跳过，中高配推荐 0.8B）
-REFINE_RECO_KEY = {4: '0', 5: '1', 8: '1'}
-
-
 def select_model(reco):
     print()
     print('  SenseVoice-Small 量化模型 (GGUF):')
@@ -221,37 +208,6 @@ def select_asr_engine():
     return engine_id
 
 
-def select_refine_model(reco):
-    """让用户选择后处理润色模型。"""
-    print()
-    print('  Qwen3.5 后处理模型 (可选，润色识别结果):')
-    print()
-    print('  ID  模型                大小       延迟     备注')
-    print('  ──  ──────────────────  ─────────  ──────  ──────────────')
-    print('  0   跳过（不使用后处理）  0 MB      0s      纯 ASR 输出')
-    print('  1   Qwen3.5-0.8B Q4_K   ~500 MB   2-4s    ★ 推荐，轻量')
-    print('  2   Qwen3.5-2B   Q4_K   ~1.2 GB   4-10s   更强纠错')
-    print()
-
-    reco_key = REFINE_RECO_KEY.get(reco, '0')
-    rdef = REFINE_MODELS[reco_key]
-    choice = ask(f'  输入 ID 确认或回车使用推荐 [ID {reco_key}]: ')
-
-    if choice == '':
-        refine_size, refine_size_str, refine_name, _ = rdef
-    elif choice in REFINE_MODELS:
-        refine_size, refine_size_str, refine_name, _ = REFINE_MODELS[choice]
-    else:
-        warn(f'无效选项，使用推荐: {rdef[2]}')
-        refine_size, refine_size_str, refine_name, _ = rdef
-
-    if refine_size:
-        info(f'选定: {refine_name} ({refine_size_str})')
-    else:
-        info('跳过后处理模型')
-    return refine_size, refine_size_str, refine_name
-
-
 def install_deps():
     info('安装系统依赖 …')
     DEPS = 'cmake gcc g++ git sox libsdl2-dev ffmpeg wtype curl make'
@@ -286,27 +242,6 @@ def build_sensevoice(cpu_cores):
         run(['cmake', '-DCMAKE_BUILD_TYPE=Release', '..'], cwd=str(build_dir))
     run(['make', f'-j{cpu_cores}'], cwd=str(build_dir))
     info('SenseVoice.cpp 编译完成')
-
-
-def build_llama(cpu_cores):
-    LLAMA_DIR = DIR / 'llama.cpp'
-    LLAMA_BIN = LLAMA_DIR / 'build' / 'bin' / 'llama-cli'
-    if LLAMA_BIN.is_file():
-        info('llama.cpp 已就绪')
-        return
-    info('克隆并编译 llama.cpp (3-10 分钟) …')
-    DIR.mkdir(parents=True, exist_ok=True)
-    if not LLAMA_DIR.is_dir():
-        run(['git', 'clone', '--depth', '1', REPO_LLAMA, str(LLAMA_DIR)])
-    build_dir = LLAMA_DIR / 'build'
-    build_dir.mkdir(parents=True, exist_ok=True)
-    if shutil.which('nvcc'):
-        info('启用 CUDA GPU 加速')
-        run(['cmake', '-DCMAKE_BUILD_TYPE=Release', '-DGGML_CUDA=ON', '..'], cwd=str(build_dir))
-    else:
-        run(['cmake', '-DCMAKE_BUILD_TYPE=Release', '..'], cwd=str(build_dir))
-    run(['make', f'-j{cpu_cores}'], cwd=str(build_dir))
-    info('llama.cpp 编译完成')
 
 
 def build_transcribe(cpu_cores):
@@ -405,28 +340,6 @@ def download_model(tier_model, tier_size, tier_name):
     return tier_model, tier_size, tier_name
 
 
-def download_refine_model(refine_size, refine_size_str, refine_name):
-    """下载 Qwen3.5 后处理模型 GGUF 文件。"""
-    if not refine_size:
-        return refine_size, refine_size_str, refine_name
-    filename = f'Qwen3.5-{refine_size}-Q4_K_M.gguf'
-    repo = f'unsloth/Qwen3.5-{refine_size}-GGUF'
-    MODEL_DIR = DIR / 'models'
-    MODEL_DIR.mkdir(parents=True, exist_ok=True)
-    model_file = MODEL_DIR / filename
-    if model_file.is_file():
-        info(f'模型已存在: {filename}')
-        return refine_size, refine_size_str, refine_name
-    url = f'https://huggingface.co/{repo}/resolve/main/{filename}'
-    info(f'下载模型 {filename} ({refine_size_str}) …')
-    ok = download(url, str(model_file), f'下载 {refine_name}')
-    if not ok:
-        warn('后处理模型下载失败，跳过后处理')
-        return None, refine_size_str, refine_name
-    info('模型下载完成')
-    return refine_size, refine_size_str, refine_name
-
-
 def deploy_airtype_script():
     """部署 airtype 运行时到 ~/.local/bin."""
     BIN.mkdir(parents=True, exist_ok=True)
@@ -446,7 +359,7 @@ def deploy_airtype_script():
     info(f'airtype → {dst}')
 
 
-def deploy_config(asr_engine, tier_model, refine_size=None):
+def deploy_config(asr_engine, tier_model):
     """生成 airtype 配置文件。"""
     config_path = DIR / 'config'
     cfg = (
@@ -458,15 +371,9 @@ def deploy_config(asr_engine, tier_model, refine_size=None):
         f'MAX_SECONDS=3600\n'
         f'LANG="zh"\n'
         f'THREADS=4\n'
+        f'\n'
+        f'# 后处理规则（自动处理：去填充词、去重复、自我纠正、补标点）\n'
     )
-    if refine_size:
-        filename = f'Qwen3.5-{refine_size}-Q4_K_M.gguf'
-        cfg += (
-            f'\n'
-            f'# 后处理润色模型（留空则跳过）\n'
-            f'REFINE_MODEL="{filename}"\n'
-            f'REFINE_THREADS=4\n'
-        )
     config_path.write_text(cfg)
     info(f'配置 → {config_path}')
 
@@ -477,15 +384,14 @@ def check_path():
         print(f"  echo 'export PATH=\"$HOME/.local/bin:$PATH\"' >> ~/.bashrc")
 
 
-def print_done(tier_name, tier_size, refine_name=None, refine_size=None):
+def print_done(tier_name, tier_size):
     print()
     print('  ======================================')
     print('   airtype 安装完成')
     print('  ======================================')
     print()
-    print(f'  STT 模型:  {tier_name} ({tier_size})')
-    if refine_name:
-        print(f'  后处理模型: {refine_name} ({refine_size})')
+    print(f'  ASR 模型:  {tier_name} ({tier_size})')
+    print(f'  后处理:    规则（去填充词 + 去重复 + 补标点）')
     print(f'  配置:  {DIR}/config')
     print(f'  日志:  {DIR}/airtype.log')
     print(f'  使用:  桌面快捷键绑定到 airtype 命令')
@@ -518,13 +424,10 @@ def main():
     else:
         err(f'未知的 ASR 引擎: {asr_engine}')
 
-    # 第三步：选择后处理模型
-    refine_size, refine_size_str, refine_name = select_refine_model(reco)
-
-    # 第四步：安装系统依赖
+    # 第三步：安装系统依赖
     install_deps()
 
-    # 第五步：编译对应的 runtime
+    # 第四步：编译对应的 runtime
     if asr_engine == 'sensevoice':
         build_sensevoice(cpu_cores)
     elif asr_engine == 'qwen3asr':
@@ -532,12 +435,9 @@ def main():
     elif asr_engine == 'funasr':
         build_funasr(cpu_cores)
 
-    if refine_size:
-        build_llama(cpu_cores)
-
     build_overlay()
 
-    # 第六步：下载模型文件
+    # 第五步：下载模型文件
     MODEL_DIR = DIR / 'models'
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -566,13 +466,11 @@ def main():
         else:
             info(f'decoder 已存在: {tier_model}')
 
-    refine_size, refine_size_str, refine_name = download_refine_model(refine_size, refine_size_str, refine_name)
-
-    # 第七步：部署配置
+    # 第六步：部署配置
     deploy_airtype_script()
-    deploy_config(asr_engine, tier_model, refine_size)
+    deploy_config(asr_engine, tier_model)
     check_path()
-    print_done(tier_name, tier_size, refine_name, refine_size_str)
+    print_done(tier_name, tier_size)
 
 
 if __name__ == '__main__':
