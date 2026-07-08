@@ -7,15 +7,9 @@ from pathlib import Path
 APP = 'airtype'
 DIR = Path.home() / '.local' / 'share' / APP
 BIN = Path.home() / '.local' / 'bin'
-# ========== 代码仓库地址 ==========
-REPO_SENSEVOICE = 'https://github.com/lovemefan/SenseVoice.cpp'   # SenseVoice ASR 引擎
-REPO_TRANSCRIBE = 'https://github.com/handy-computer/transcribe.cpp'  # Qwen3-ASR 引擎
-REPO_FUNASR = 'https://github.com/FunAudioLLM/Fun-ASR'            # Fun-ASR-Nano 引擎
+REPO_SENSEVOICE = 'https://github.com/lovemefan/SenseVoice.cpp'
 REPO_BASE = 'https://raw.githubusercontent.com/qiao-925/airtype/master'
-
-# ========== 模型下载地址 ==========
-MODEL_BASE = 'https://huggingface.co/lovemefan/sense-voice-gguf/resolve/main'  # SenseVoice 模型
-QWEN35_BASE = 'https://huggingface.co/unsloth'                    # Qwen3.5 后处理模型
+MODEL_BASE = 'https://huggingface.co/lovemefan/sense-voice-gguf/resolve/main'
 STB_URL = 'https://raw.githubusercontent.com/nothings/stb/master/stb_truetype.h'
 
 RED = '\033[0;31m'; GREEN = '\033[0;32m'; YELLOW = '\033[1;33m'; CYAN = '\033[0;36m'; NC = '\033[0m'
@@ -26,7 +20,6 @@ say  = lambda m: print(f'{CYAN}[*]{NC} {m}')
 
 
 def ask(prompt=''):
-    """从 /dev/tty 读取用户输入（pipe 安装时也能交互）."""
     if prompt:
         sys.stderr.write(prompt)
         sys.stderr.flush()
@@ -43,7 +36,6 @@ def run(cmd, **kw):
 
 
 def download(url, dest, desc='下载'):
-    """带进度条的下载."""
     say(f'{desc} ...')
     try:
         urllib.request.urlretrieve(url, dest, reporthook=_progress)
@@ -70,7 +62,6 @@ def _progress(count, block_size, total_size):
     mb_total = total_size / (1024 * 1024)
     print(f'\r  [{bar}] {pct:5.1f}%  {mb_done:.0f}/{mb_total:.0f} MB',
           end='', flush=True)
-
 
 
 def banner():
@@ -140,9 +131,8 @@ MODELS = {
     '9':  ('sense-voice-small-fp16.gguf',  '470 MB', 'fp16'),
     '10': ('sense-voice-small-fp32.gguf',  '937 MB', 'fp32'),
 }
-
-# 硬件等级 → MODELS 字典 key
 RECO_KEY = {4: '2', 5: '6', 8: '8'}
+
 
 def select_model(reco):
     print()
@@ -176,36 +166,6 @@ def select_model(reco):
 
     info(f'选定: {tier_name} ({tier_size})')
     return tier_model, tier_size, tier_name
-
-
-# ========== ASR 引擎选项 ==========
-# 元组格式：(引擎标识, 显示名, 特点)
-ASR_ENGINES = {
-    '1': ('sensevoice', 'SenseVoice', '速度最快，延迟最低，5种语言'),
-    '2': ('qwen3asr',   'Qwen3-ASR',  '准确率更高，52语言，22种方言'),
-    '3': ('funasr',     'Fun-ASR-Nano', '方言支持好，官方llama.cpp runtime'),
-}
-
-
-def select_asr_engine():
-    """让用户选择 ASR 语音识别引擎。"""
-    print()
-    print('  ASR 语音识别引擎:')
-    print()
-    print('  ID  引擎            特点')
-    print('  ──  ──────────────  ─────────────────────────────────')
-    print('  1   SenseVoice      ★ 速度最快，延迟最低，5种语言')
-    print('  2   Qwen3-ASR       准确率更高，52语言，22种中文方言')
-    print('  3   Fun-ASR-Nano    方言支持好，官方 llama.cpp runtime')
-    print()
-
-    choice = ask('  输入 ID 确认或回车使用推荐 [ID 1]: ')
-
-    if choice == '' or choice not in ASR_ENGINES:
-        choice = '1'
-    engine_id, engine_name, engine_desc = ASR_ENGINES[choice]
-    info(f'选定: {engine_name} — {engine_desc}')
-    return engine_id
 
 
 def install_deps():
@@ -242,51 +202,6 @@ def build_sensevoice(cpu_cores):
         run(['cmake', '-DCMAKE_BUILD_TYPE=Release', '..'], cwd=str(build_dir))
     run(['make', f'-j{cpu_cores}'], cwd=str(build_dir))
     info('SenseVoice.cpp 编译完成')
-
-
-def build_transcribe(cpu_cores):
-    """编译 transcribe.cpp（Qwen3-ASR 引擎）。"""
-    TRANSCRIBE_DIR = DIR / 'transcribe.cpp'
-    TRANSCRIBE_BIN = TRANSCRIBE_DIR / 'build' / 'bin' / 'transcribe'
-    if TRANSCRIBE_BIN.is_file():
-        info('transcribe.cpp 已就绪')
-        return
-    info('克隆并编译 transcribe.cpp (3-10 分钟) …')
-    DIR.mkdir(parents=True, exist_ok=True)
-    if not TRANSCRIBE_DIR.is_dir():
-        run(['git', 'clone', '--depth', '1', REPO_TRANSCRIBE, str(TRANSCRIBE_DIR)])
-    build_dir = TRANSCRIBE_DIR / 'build'
-    build_dir.mkdir(parents=True, exist_ok=True)
-    if shutil.which('nvcc'):
-        info('启用 CUDA GPU 加速')
-        run(['cmake', '-DCMAKE_BUILD_TYPE=Release', '-DGGML_CUDA=ON', '..'], cwd=str(build_dir))
-    else:
-        run(['cmake', '-DCMAKE_BUILD_TYPE=Release', '..'], cwd=str(build_dir))
-    run(['make', f'-j{cpu_cores}'], cwd=str(build_dir))
-    info('transcribe.cpp 编译完成')
-
-
-def build_funasr(cpu_cores):
-    """编译 Fun-ASR-Nano 的 llama.cpp runtime。"""
-    FUNASR_DIR = DIR / 'Fun-ASR'
-    FUNASR_BIN = FUNASR_DIR / 'runtime' / 'llama.cpp' / 'build' / 'bin' / 'llama-funasr-cli'
-    if FUNASR_BIN.is_file():
-        info('Fun-ASR runtime 已就绪')
-        return
-    info('克隆并编译 Fun-ASR runtime (3-10 分钟) …')
-    DIR.mkdir(parents=True, exist_ok=True)
-    if not FUNASR_DIR.is_dir():
-        run(['git', 'clone', '--depth', '1', REPO_FUNASR, str(FUNASR_DIR)])
-    llama_dir = FUNASR_DIR / 'runtime' / 'llama.cpp'
-    build_dir = llama_dir / 'build'
-    build_dir.mkdir(parents=True, exist_ok=True)
-    if shutil.which('nvcc'):
-        info('启用 CUDA GPU 加速')
-        run(['cmake', '-DCMAKE_BUILD_TYPE=Release', '-DGGML_CUDA=ON', '..'], cwd=str(build_dir))
-    else:
-        run(['cmake', '-DCMAKE_BUILD_TYPE=Release', '..'], cwd=str(build_dir))
-    run(['make', f'-j{cpu_cores}'], cwd=str(build_dir))
-    info('Fun-ASR runtime 编译完成')
 
 
 def build_overlay():
@@ -341,40 +256,28 @@ def download_model(tier_model, tier_size, tier_name):
 
 
 def deploy_airtype_script():
-    """部署 airtype 运行时到 ~/.local/bin."""
     BIN.mkdir(parents=True, exist_ok=True)
     dst = BIN / 'airtype'
-
-    # 本地仓库
     src = Path(__file__).resolve().parent / 'airtype'
     if src.is_file():
         shutil.copy2(str(src), str(dst))
     else:
-        # curl | python3 远程安装，从 GitHub 拉取
         url = f'{REPO_BASE}/airtype'
         if not download(url, str(dst), '下载 airtype 运行时'):
             err('airtype 运行时下载失败')
-
     dst.chmod(0o755)
     info(f'airtype → {dst}')
 
 
-def deploy_config(asr_engine, tier_model):
-    """生成 airtype 配置文件。"""
+def deploy_config(tier_model):
     config_path = DIR / 'config'
-    cfg = (
+    config_path.write_text(
         f'# airtype 配置\n'
-        f'\n'
-        f'# ASR 语音识别引擎: sensevoice | qwen3asr | funasr\n'
-        f'ASR_ENGINE="{asr_engine}"\n'
         f'MODEL="{tier_model}"\n'
         f'MAX_SECONDS=3600\n'
         f'LANG="zh"\n'
         f'THREADS=4\n'
-        f'\n'
-        f'# 后处理规则（自动处理：去填充词、去重复、自我纠正、补标点）\n'
     )
-    config_path.write_text(cfg)
     info(f'配置 → {config_path}')
 
 
@@ -390,85 +293,24 @@ def print_done(tier_name, tier_size):
     print('   airtype 安装完成')
     print('  ======================================')
     print()
-    print(f'  ASR 模型:  {tier_name} ({tier_size})')
-    print(f'  后处理:    规则（去填充词 + 去重复 + 补标点）')
+    print(f'  模型:  {tier_name} ({tier_size})')
     print(f'  配置:  {DIR}/config')
     print(f'  日志:  {DIR}/airtype.log')
     print(f'  使用:  桌面快捷键绑定到 airtype 命令')
     print()
 
-# ======================================================================
-# 主入口
-# ======================================================================
+
 def main():
     banner()
     detect_system()
     cpu_cores, reco = detect_hardware()
-
-    # 第一步：选择 ASR 引擎
-    asr_engine = select_asr_engine()
-
-    # 第二步：选择 ASR 模型（根据引擎显示不同选项）
-    if asr_engine == 'sensevoice':
-        tier_model, tier_size, tier_name = select_model(reco)
-    elif asr_engine == 'qwen3asr':
-        # Qwen3-ASR 使用社区 GGUF，目前只有 0.6B Q4_K_M
-        tier_model = 'Qwen3-ASR-0.6B-Q4_K_M.gguf'
-        tier_size, tier_name = '~940 MB', 'Qwen3-ASR-0.6B'
-        info(f'Qwen3-ASR 模型: {tier_name} ({tier_size})')
-    elif asr_engine == 'funasr':
-        # Fun-ASR-Nano 使用 encoder + decoder 双文件
-        tier_model = 'qwen3-0.6b-q4km.gguf'
-        tier_size, tier_name = '~950 MB', 'Fun-ASR-Nano'
-        info(f'Fun-ASR-Nano 模型: encoder + {tier_model} ({tier_size})')
-    else:
-        err(f'未知的 ASR 引擎: {asr_engine}')
-
-    # 第三步：安装系统依赖
+    tier_model, tier_size, tier_name = select_model(reco)
     install_deps()
-
-    # 第四步：编译对应的 runtime
-    if asr_engine == 'sensevoice':
-        build_sensevoice(cpu_cores)
-    elif asr_engine == 'qwen3asr':
-        build_transcribe(cpu_cores)
-    elif asr_engine == 'funasr':
-        build_funasr(cpu_cores)
-
+    build_sensevoice(cpu_cores)
     build_overlay()
-
-    # 第五步：下载模型文件
-    MODEL_DIR = DIR / 'models'
-    MODEL_DIR.mkdir(parents=True, exist_ok=True)
-
-    if asr_engine == 'sensevoice':
-        tier_model, tier_size, tier_name = download_model(tier_model, tier_size, tier_name)
-    elif asr_engine == 'qwen3asr':
-        # 下载 Qwen3-ASR GGUF 模型
-        model_file = MODEL_DIR / tier_model
-        if not model_file.is_file():
-            url = f'https://huggingface.co/ggml-org/Qwen3-ASR-0.6B-GGUF/resolve/main/{tier_model}'
-            download(url, str(model_file), f'下载 {tier_name}')
-        else:
-            info(f'模型已存在: {tier_model}')
-    elif asr_engine == 'funasr':
-        # 下载 Fun-ASR-Nano encoder 和 decoder
-        enc_file = MODEL_DIR / 'funasr-encoder-f16.gguf'
-        dec_file = MODEL_DIR / tier_model
-        if not enc_file.is_file():
-            url = 'https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-GGUF/resolve/main/funasr-encoder-f16.gguf'
-            download(url, str(enc_file), '下载 FunASR encoder')
-        else:
-            info('encoder 已存在')
-        if not dec_file.is_file():
-            url = f'https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-GGUF/resolve/main/{tier_model}'
-            download(url, str(dec_file), f'下载 FunASR decoder')
-        else:
-            info(f'decoder 已存在: {tier_model}')
-
-    # 第六步：部署配置
+    tier_model, tier_size, tier_name = download_model(tier_model, tier_size, tier_name)
     deploy_airtype_script()
-    deploy_config(asr_engine, tier_model)
+    deploy_config(tier_model)
     check_path()
     print_done(tier_name, tier_size)
 
