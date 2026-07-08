@@ -66,14 +66,13 @@ def run_refine_test(text, prompt, model_path, llama_path, threads=4, timeout=60)
     """
     执行单次后处理推理，返回 (结果文本, 耗时秒数, stderr, returncode)。
 
-    使用 llama-completion 的补全格式：
-    -p "输入：{text}\n输出："
-    模型会补全"输出："之后的内容。
+    使用 llama-completion 的聊天模板格式：
+    -sys 系统提示词 + -p 用户输入
     """
-    full_prompt = f'输入：{text}\n输出：'
     cmd = [
         str(llama_path), '-m', str(model_path),
-        '-p', full_prompt,
+        '-sys', prompt,
+        '-p', text,
         '-n', '300', '-t', str(threads),
     ]
 

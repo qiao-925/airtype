@@ -249,11 +249,12 @@ def run_refine(text):
     log(f'后处理 Step 2/4: 系统提示词={len(REFINE_PROMPT)} 字符')
 
     # Step 3: 调用 llama-completion
-    # 使用最简单的补全格式，让模型直接输出修正结果
-    # 注意：不加系统提示词前缀，避免引发模型分析行为
-    full_prompt = f'输入：{text}\n输出：'
+    # 使用聊天模板格式：-sys 系统提示词 + -p 用户输入
+    # 非思考模型（Qwen2.5）需要明确的指令来执行任务
+    # 思考模型（Qwen3.5）可以用 `--reasoning off` 禁用思考
     cmd = [str(llama), '-m', str(model),
-           '-p', full_prompt,
+           '-sys', REFINE_PROMPT,
+           '-p', text,
            '-n', '300', '-t', str(REFINE_THREADS)]
     log(f'后处理 Step 3/4: 开始推理 (timeout=60s, threads={REFINE_THREADS})...')
     t0 = time.time()
