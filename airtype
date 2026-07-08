@@ -31,10 +31,6 @@ THREADS = 4
 # 零模型依赖、零延迟、零磁盘额外开销
 ENABLE_RULES = True
 
-# ========== 输入方式配置 ==========
-# 默认：复制到剪贴板，用户自行 Ctrl+V（最通用）
-# 如需自动粘贴，设置 PASTE_SHORTCUT="ctrl+v"（不保证所有系统兼容）
-PASTE_SHORTCUT = ''
 
 
 # 合法的 ASR 引擎列表，用于配置校验
@@ -43,7 +39,7 @@ _VALID_ASR_ENGINES = ('sensevoice', 'qwen3asr', 'funasr')
 
 def load_config():
     """从 config 文件加载配置。config 格式为 KEY=VALUE，支持引号和注释。"""
-    global ASR_ENGINE, MODEL, MAX_SECONDS, LANG, THREADS, PASTE_SHORTCUT
+    global ASR_ENGINE, MODEL, MAX_SECONDS, LANG, THREADS
     if not CONFIG.is_file():
         return
     try:
@@ -63,7 +59,6 @@ def load_config():
                 elif k == 'MAX_SECONDS':   MAX_SECONDS = int(v)
                 elif k == 'LANG':          LANG = v
                 elif k == 'THREADS':       THREADS = int(v)
-                elif k == 'PASTE_SHORTCUT': PASTE_SHORTCUT = v
     except Exception as e:
         log(f'! 配置解析错误: {e}')
 
@@ -405,9 +400,8 @@ def main():
     else:
         show_error(f'Unknown ASR engine: {ASR_ENGINE}')
         sys.exit(1)
-    # 始终需要剪贴板工具（复制文本用）
-    clipboard_tool = any(shutil.which(t) for t in ('wl-copy', 'xclip', 'xsel'))
-    checks.append((clipboard_tool, 'No clipboard tool (install wl-copy, xclip, or xsel)'))
+    # 需要 wtype 用于字符输入
+    checks.append((shutil.which('wtype') is not None, 'wtype not installed'))
     for ok, msg in checks:
         if not ok:
             show_error(msg)
@@ -487,32 +481,14 @@ def main():
     else:
         kill_overlay()
         time.sleep(0.1)  # 等待焦点回到目标窗口
+        # 直接字符输入：替换换行为空格，避免浏览器跳转
         safe_text = text.replace('\n', ' ').replace('\r', '').replace('\t', ' ')
-
-        # 复制到剪贴板（始终执行，无论是否自动粘贴）
-        log('复制到剪贴板...')
-        copied = copy_to_clipboard(safe_text)
-
-        # 如果配置了自动粘贴，尝试一次
-        if copied and PASTE_SHORTCUT:
-            log(f'尝试自动粘贴 ({PASTE_SHORTCUT})...')
-            if PASTE_SHORTCUT == 'ctrl+v':
-                cmd = ['ydotool', 'key', 'ctrl+v'] if shutil.which('ydotool') else ['wtype', '-M', 'ctrl', 'v', '-m', 'ctrl']
-            elif PASTE_SHORTCUT == 'shift+insert':
-                cmd = ['ydotool', 'key', 'shift+insert'] if shutil.which('ydotool') else ['wtype', '-M', 'shift', 'Insert', '-m', 'shift']
-            elif PASTE_SHORTCUT == 'ctrl+shift+v':
-                cmd = ['ydotool', 'key', 'ctrl+shift+v'] if shutil.which('ydotool') else ['wtype', '-M', 'ctrl', '-M', 'shift', 'v', '-m', 'shift', '-m', 'ctrl']
-            r = subprocess.run(cmd, check=False)
-            if r.returncode == 0:
-                log('自动粘贴成功')
-            else:
-                log(f'自动粘贴失败（不兼容），文本已在剪贴板')
+        log(f'字符输入 ({len(safe_text)} 字符)...')
+        r = subprocess.run(['wtype', '--', safe_text], check=False)
+        if r.returncode == 0:
+            log('已输入')
         else:
-            log('文本已复制到剪贴板，请按 Ctrl+V 粘贴')
-            if has_overlay:
-                show_overlay('clipboard')
-                time.sleep(1.5)
-                kill_overlay()
+            log(f'! wtype 失败: exit={r.returncode}')
 
 
 def _handle_signal(signum, frame):
