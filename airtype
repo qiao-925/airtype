@@ -240,7 +240,7 @@ def run_refine(text):
     llama = DIR / 'llama.cpp' / 'build' / 'bin' / 'llama-cli'
     model = DIR / 'models' / REFINE_MODEL
 
-    # 检查引擎和模型是否存在
+    # Step 1: 检查引擎和模型
     if not llama.is_file():
         log(f'! 后处理引擎不存在: {llama}')
         return None
@@ -248,29 +248,53 @@ def run_refine(text):
         log(f'! 后处理模型不存在: {model}')
         return None
 
-    log(f'后处理开始 (模型: {REFINE_MODEL})')
+    # Step 2: 构造 prompt
     prompt = f'{REFINE_PROMPT}\n\n{text}'
+    log(f'后处理 Step 1/4: 引擎={llama.name}, 模型={REFINE_MODEL}')
+    log(f'后处理 Step 2/4: 输入文本({len(text)}字): "{text[:80]}"')
+    log(f'后处理 Step 2/4: prompt长度={len(prompt)} 字符')
+
+    # Step 3: 调用 llama-cli
+    cmd = [str(llama), '-m', str(model), '-p', prompt,
+           '-n', '512', '-t', str(REFINE_THREADS),
+           '--no-display-prompt', '--log-disable']
+    log(f'后处理 Step 3/4: 开始推理 (timeout=60s, threads={REFINE_THREADS})...')
+    t0 = time.time()
     try:
-        r = subprocess.run(
-            [str(llama), '-m', str(model), '-p', prompt,
-             '-n', '512', '-t', str(REFINE_THREADS),
-             '--no-display-prompt', '--log-disable'],
-            capture_output=True, text=True, check=False, timeout=60)
+        r = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=60)
     except subprocess.TimeoutExpired:
-        log('! 后处理超时 (60s)，跳过')
+        elapsed = time.time() - t0
+        log(f'! 后处理超时 ({elapsed:.1f}s > 60s)，跳过')
+        return None
+    elapsed = time.time() - t0
+
+    # Step 4: 解析结果
+    raw_out = r.stdout.strip() if r.stdout else ''
+    stderr_out = r.stderr.strip() if r.stderr else ''
+    log(f'后处理 Step 4/4: 耗时={elapsed:.1f}s, returncode={r.returncode}')
+    if stderr_out:
+        log(f'后处理 stderr: {stderr_out[:300]}')
+    log(f'后处理 原始输出({len(raw_out)}字): "{raw_out[:200]}"')
+
+    if r.returncode != 0:
+        log(f'! 后处理返回非零: {r.returncode}')
         return None
 
-    # 记录 stderr 以便调试
-    if r.returncode != 0 and r.stderr:
-        log(f'! 后处理错误: {r.stderr[:200]}')
-
-    out = r.stdout.strip() if r.stdout else ''
-    if not out:
+    if not raw_out:
         log('! 后处理输出为空')
         return None
 
-    log(f'后处理完成: {out[:100]}')
-    return out
+    # 清理 llama-cli 输出中可能的额外内容
+    # llama-cli 可能在输出前打印 prompt 回显，取最后一个非空行
+    lines = [l.strip() for l in raw_out.splitlines() if l.strip()]
+    if lines:
+        result = lines[-1]
+    else:
+        log('! 后处理输出清理后为空')
+        return None
+
+    log(f'后处理完成: "{text}" → "{result}"')
+    return result
 
 
 def main():
