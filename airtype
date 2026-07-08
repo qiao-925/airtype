@@ -492,11 +492,13 @@ def main():
         time.sleep(0.5)  # 等待焦点回到目标窗口
         safe_text = text.replace('\n', ' ').replace('\r', '').replace('\t', ' ')
         log(f'字符输入 ({len(safe_text)} 字符)...')
-        r = subprocess.run(['wtype', '--', safe_text], check=False)
-        if r.returncode == 0:
-            log('已输入')
-        else:
-            log(f'! wtype 失败: exit={r.returncode}')
+        # 分批输入，每批 10 字间隔 20ms，防止浏览器误判
+        batch_size = 10
+        for i in range(0, len(safe_text), batch_size):
+            batch = safe_text[i:i + batch_size]
+            subprocess.run(['wtype', '--', batch], check=False)
+            time.sleep(0.02)
+        log('已输入')
 
 
 def _handle_signal(signum, frame):
