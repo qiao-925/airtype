@@ -250,11 +250,15 @@ def run_refine(text):
 
     log(f'后处理开始 (模型: {REFINE_MODEL})')
     prompt = f'{REFINE_PROMPT}\n\n{text}'
-    r = subprocess.run(
-        [str(llama), '-m', str(model), '-p', prompt,
-         '-n', '512', '-t', str(REFINE_THREADS),
-         '--no-display-prompt', '--log-disable'],
-        capture_output=True, text=True, check=False, timeout=30)
+    try:
+        r = subprocess.run(
+            [str(llama), '-m', str(model), '-p', prompt,
+             '-n', '512', '-t', str(REFINE_THREADS),
+             '--no-display-prompt', '--log-disable'],
+            capture_output=True, text=True, check=False, timeout=60)
+    except subprocess.TimeoutExpired:
+        log('! 后处理超时 (60s)，跳过')
+        return None
 
     # 记录 stderr 以便调试
     if r.returncode != 0 and r.stderr:
