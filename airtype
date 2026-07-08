@@ -28,18 +28,14 @@ THREADS = 4
 
 # ========== 后处理润色模型配置 ==========
 # REFINE_MODEL: 后处理模型文件名，为空则跳过后处理
+# 推荐使用非思考模型（Qwen2.5 系列），行为稳定、延迟低
+# Qwen3.5 系列是思考模型，可能对简单任务过度分析
 # 可选值：
-#   "Qwen3.5-0.8B-Q4_K_M.gguf" — 轻量，延迟低（推荐）
-#   "Qwen3.5-2B-Q4_K_M.gguf"   — 更强，延迟稍高
+#   "qwen2.5-0.5b-instruct-q4_k_m.gguf" — 轻量，稳定，首选
+#   "Qwen3.5-0.8B-Q4_K_M.gguf"          — 更强但会输出思考过程
+#   "Qwen3.5-2B-Q4_K_M.gguf"            — 更强，延迟更高
 REFINE_MODEL = ''
-REFINE_PROMPT = '''你是语音输入后处理助手。对用户语音识别的原始文本做如下处理：
-1. 去除填充词和语气词（嗯、啊、那个、就是说、你知道的、然后、对吧）
-2. 去除重复词句（如"今天今天天气不错"→"今天天气不错"）
-3. 识别自我纠正（如"明天，不对，后天"→"后天"），只保留最终意图
-4. 修正明显的识别错误，补全标点符号
-5. 如有列表或步骤，整理为结构化文本
-6. 保持原意，语言简洁自然，不要添加原文没有的内容
-只输出修正后的文本，不要解释。'''
+REFINE_PROMPT = '修正语音：去语气词（嗯啊那个），去重复，补标点。只输出结果。'
 REFINE_THREADS = 4
 
 
@@ -236,8 +232,8 @@ def run_asr(audio_path):
 
 
 def run_refine(text):
-    """调用 llama-cli 后处理润色."""
-    llama = DIR / 'llama.cpp' / 'build' / 'bin' / 'llama-cli'
+    """调用 llama-completion 后处理润色（非交互模式）."""
+    llama = DIR / 'llama.cpp' / 'build' / 'bin' / 'llama-completion'
     model = DIR / 'models' / REFINE_MODEL
 
     # Step 1: 检查引擎和模型
@@ -248,16 +244,19 @@ def run_refine(text):
         log(f'! 后处理模型不存在: {model}')
         return None
 
-    # Step 2: 构造 prompt
-    prompt = f'{REFINE_PROMPT}\n\n{text}'
+    # Step 2: 构造 prompt（使用系统提示词 + 用户输入）
     log(f'后处理 Step 1/4: 引擎={llama.name}, 模型={REFINE_MODEL}')
     log(f'后处理 Step 2/4: 输入文本({len(text)}字): "{text[:80]}"')
-    log(f'后处理 Step 2/4: prompt长度={len(prompt)} 字符')
+    log(f'后处理 Step 2/4: 系统提示词={len(REFINE_PROMPT)} 字符')
 
-    # Step 3: 调用 llama-cli
-    cmd = [str(llama), '-m', str(model), '-p', prompt,
-           '-n', '512', '-t', str(REFINE_THREADS),
-           '--no-display-prompt', '--log-disable']
+    # Step 3: 调用 llama-completion
+    # -sys: 系统提示词，设定模型行为
+    # -p:   用户输入文本
+    # llama-completion 会自动应用聊天模板并生成回复
+    cmd = [str(llama), '-m', str(model),
+           '-sys', REFINE_PROMPT,
+           '-p', text,
+           '-n', '300', '-t', str(REFINE_THREADS)]
     log(f'后处理 Step 3/4: 开始推理 (timeout=60s, threads={REFINE_THREADS})...')
     t0 = time.time()
     try:
@@ -284,15 +283,27 @@ def run_refine(text):
         log('! 后处理输出为空')
         return None
 
-    # 清理 llama-cli 输出中可能的额外内容
-    # llama-cli 可能在输出前打印 prompt 回显，取最后一个非空行
+    # 解析 llama-completion 的输出：
+    # 聊天模板格式为：
+    #   system\n提示词\nuser\n输入\nassistant\n<think>...</think>\n实际文本\n\n> EOF by user
+    # 取 </think> 之后最后一段实际文本（跳过 "> EOF by user" 等控制信息）
+    for tag in ['</think>', '<think>', 'assistant']:
+        if tag in raw_out:
+            raw_out = raw_out.split(tag)[-1]
+            raw_out = raw_out.strip()
+
     lines = [l.strip() for l in raw_out.splitlines() if l.strip()]
+    # 去掉 "> EOF" 控制行
+    lines = [l for l in lines if not l.startswith('>')]
     if lines:
+        # 取最后一行非空输出（排除可能残留的 system/user 回显）
         result = lines[-1]
     else:
         log('! 后处理输出清理后为空')
         return None
 
+    # 清理结果：去掉可能的引号和多余空格
+    result = result.strip().strip('"').strip("'").strip('）').strip('）').strip()
     log(f'后处理完成: "{text}" → "{result}"')
     return result
 

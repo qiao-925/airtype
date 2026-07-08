@@ -145,15 +145,17 @@ MODELS = {
 # 硬件等级 → MODELS 字典 key
 RECO_KEY = {4: '2', 5: '6', 8: '8'}
 
-# ========== 后处理模型选项（Qwen3.5 系列） ==========
-# 元组格式：(size标识, 文件大小, 显示名, repo名)
+# ========== 后处理模型选项（Qwen 系列） ==========
+# 元组格式：(size标识, 文件大小, 显示名, repo名, 文件名)
+# 注意：Qwen3.5 是思考模型，可能对简单任务过度分析
 REFINE_MODELS = {
-    '0': (None,      '0 MB',     '跳过',   ''),
-    '1': ('0.8B',    '~500 MB',  '0.8B',   'Qwen3.5-0.8B'),
-    '2': ('2B',      '~1.2 GB',  '2B',     'Qwen3.5-2B'),
+    '0': (None,      '0 MB',     '跳过',               '',               ''),
+    '1': ('0.5B',    '469 MB',   'Qwen2.5-0.5B',       'Qwen/Qwen2.5-0.5B-Instruct-GGUF',   'qwen2.5-0.5b-instruct-q4_k_m.gguf'),
+    '2': ('0.8B',    '~500 MB',  'Qwen3.5-0.8B(思考)', 'unsloth/Qwen3.5-0.8B-GGUF',          'Qwen3.5-0.8B-Q4_K_M.gguf'),
+    '3': ('2B',      '~1.2 GB',  'Qwen3.5-2B(思考)',   'unsloth/Qwen3.5-2B-GGUF',            'Qwen3.5-2B-Q4_K_M.gguf'),
 }
 
-# 硬件等级 → REFINE_MODELS 字典 key（低配跳过，中高配推荐 0.8B）
+# 硬件等级 → REFINE_MODELS 字典 key（低配跳过，中高配推荐 Qwen2.5-0.5B）
 REFINE_RECO_KEY = {4: '0', 5: '1', 8: '1'}
 
 
@@ -224,13 +226,14 @@ def select_asr_engine():
 def select_refine_model(reco):
     """让用户选择后处理润色模型。"""
     print()
-    print('  Qwen3.5 后处理模型 (可选，润色识别结果):')
+    print('  后处理润色模型 (可选，润色识别结果):')
     print()
-    print('  ID  模型                大小       延迟     备注')
-    print('  ──  ──────────────────  ─────────  ──────  ──────────────')
-    print('  0   跳过（不使用后处理）  0 MB      0s      纯 ASR 输出')
-    print('  1   Qwen3.5-0.8B Q4_K   ~500 MB   2-4s    ★ 推荐，轻量')
-    print('  2   Qwen3.5-2B   Q4_K   ~1.2 GB   4-10s   更强纠错')
+    print('  ID  模型                    大小       延迟     备注')
+    print('  ──  ──────────────────────  ─────────  ──────  ──────────────')
+    print('  0   跳过（不使用后处理）     0 MB      0s      纯 ASR 输出')
+    print('  1   Qwen2.5-0.5B Q4_K       469 MB    1.5-4s  ★ 推荐，非思考模型，稳定')
+    print('  2   Qwen3.5-0.8B Q4_K      ~500 MB    2-5s    思考模型，更强但会思考')
+    print('  3   Qwen3.5-2B   Q4_K      ~1.2 GB    4-10s   最强思考模型')
     print()
 
     reco_key = REFINE_RECO_KEY.get(reco, '0')
@@ -406,11 +409,20 @@ def download_model(tier_model, tier_size, tier_name):
 
 
 def download_refine_model(refine_size, refine_size_str, refine_name):
-    """下载 Qwen3.5 后处理模型 GGUF 文件。"""
+    """下载后处理模型 GGUF 文件。"""
     if not refine_size:
         return refine_size, refine_size_str, refine_name
-    filename = f'Qwen3.5-{refine_size}-Q4_K_M.gguf'
-    repo = f'unsloth/Qwen3.5-{refine_size}-GGUF'
+
+    # 从 REFINE_MODELS 表查找对应的仓库和文件名
+    _, _, _, repo, filename = '', '', '', '', ''
+    for k, v in REFINE_MODELS.items():
+        if v[0] == refine_size:
+            _, _, _, repo, filename = v
+            break
+    if not filename:
+        warn(f'未知的后处理模型: {refine_size}')
+        return None, refine_size_str, refine_name
+
     MODEL_DIR = DIR / 'models'
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
     model_file = MODEL_DIR / filename
@@ -460,7 +472,14 @@ def deploy_config(asr_engine, tier_model, refine_size=None):
         f'THREADS=4\n'
     )
     if refine_size:
-        filename = f'Qwen3.5-{refine_size}-Q4_K_M.gguf'
+        # 从 REFINE_MODELS 表查找文件名
+        filename = ''
+        for v in REFINE_MODELS.values():
+            if v[0] == refine_size:
+                filename = v[4]
+                break
+        if not filename:
+            filename = f'qwen2.5-{refine_size.lower()}-instruct-q4_k_m.gguf'
         cfg += (
             f'\n'
             f'# 后处理润色模型（留空则跳过）\n'
