@@ -239,16 +239,34 @@ def run_refine(text):
     """调用 llama-cli 后处理润色."""
     llama = DIR / 'llama.cpp' / 'build' / 'bin' / 'llama-cli'
     model = DIR / 'models' / REFINE_MODEL
-    if not llama.is_file() or not model.is_file():
+
+    # 检查引擎和模型是否存在
+    if not llama.is_file():
+        log(f'! 后处理引擎不存在: {llama}')
         return None
+    if not model.is_file():
+        log(f'! 后处理模型不存在: {model}')
+        return None
+
+    log(f'后处理开始 (模型: {REFINE_MODEL})')
     prompt = f'{REFINE_PROMPT}\n\n{text}'
     r = subprocess.run(
         [str(llama), '-m', str(model), '-p', prompt,
          '-n', '512', '-t', str(REFINE_THREADS),
          '--no-display-prompt', '--log-disable'],
         capture_output=True, text=True, check=False, timeout=30)
+
+    # 记录 stderr 以便调试
+    if r.returncode != 0 and r.stderr:
+        log(f'! 后处理错误: {r.stderr[:200]}')
+
     out = r.stdout.strip() if r.stdout else ''
-    return out if out else None
+    if not out:
+        log('! 后处理输出为空')
+        return None
+
+    log(f'后处理完成: {out[:100]}')
+    return out
 
 
 def main():
@@ -386,13 +404,22 @@ def main():
     log(f'识别完成: {text}')
 
     # --- 后处理润色 ---
+    log(f'后处理配置: REFINE_MODEL="{REFINE_MODEL}"')
     if REFINE_MODEL:
         refined = run_refine(text)
         if refined:
-            log(f'润色完成: {refined}')
+            log(f'润色生效: "{text}" → "{refined}"')
             text = refined
+        else:
+            log(f'润色未生效，使用原始文本')
+    else:
+        log('后处理未配置，跳过')
+
+    # --- 输出文本 ---
+    log(f'最终文本: "{text[:100]}"')
 
     if args.clipboard:
+        log('尝试复制到剪贴板...')
         ok = copy_to_clipboard(text)
         if ok:
             log('已复制到剪贴板')
@@ -410,21 +437,26 @@ def main():
         # 用剪贴板 + 模拟粘贴键代替 wtype 直接输入，避免浏览器跳转和输入法冲突
         pasted = False
         # Step 1: 复制到剪贴板
+        log('Step 1: 复制到剪贴板...')
         if copy_to_clipboard(text):
             time.sleep(0.05)  # 等待剪贴板就绪
             # Step 2: 模拟 Ctrl+V 粘贴 (通过 wtype 发送快捷键)
+            log('Step 2: 模拟 Ctrl+V 粘贴...')
             r = subprocess.run(['wtype', '-M', 'ctrl', 'v', '-m', 'ctrl'], check=False)
             if r.returncode == 0:
                 log('已粘贴输入')
                 pasted = True
             else:
-                log(f'! wtype 粘贴失败: exit={r.returncode}')
+                log(f'! wtype 粘贴失败: exit={r.returncode}, stderr={r.stderr}')
+        else:
+            log('! 剪贴板复制失败')
         if not pasted:
             # 回退: 直接用 wtype 输入 (去掉换行符以防万一)
             safe_text = text.replace('\n', ' ').replace('\r', '')
+            log(f'回退: 直接 wtype 输入 ({len(safe_text)} 字符)...')
             r = subprocess.run(['wtype', '--', safe_text], check=False)
             if r.returncode != 0:
-                log(f'! wtype 失败: exit={r.returncode}')
+                log(f'! wtype 失败: exit={r.returncode}, stderr={r.stderr}')
             else:
                 log('已输入 (回退模式)')
 
