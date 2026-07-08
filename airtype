@@ -26,16 +26,10 @@ MAX_SECONDS = 3600
 LANG = 'zh'
 THREADS = 4
 
-# ========== 后处理润色模型配置 ==========
-# REFINE_MODEL: 后处理模型文件名，为空则跳过后处理
-# 推荐使用非思考模型（Qwen2.5 系列），行为稳定、延迟低
-# 可选值：
-#   "qwen2.5-0.5b-instruct-q4_k_m.gguf" — 轻量稳定，首推（~1.2s/条）
-#   "Qwen3.5-0.8B-Q4_K_M.gguf"          — 思考模型，延迟更高（~5.6s/条）
-#   "Qwen3.5-2B-Q4_K_M.gguf"            — 更强，延迟更高
-REFINE_MODEL = ''
-REFINE_PROMPT = '修正语音：去语气词（嗯啊那个），去重复，补标点。只输出结果。'
-REFINE_THREADS = 4
+# ========== 后处理规则配置 ==========
+# 使用纯规则替换文本润色（去语气词、去重复、自我纠正、补标点）
+# 零模型依赖、零延迟、零磁盘额外开销
+ENABLE_RULES = True
 
 
 # 合法的 ASR 引擎列表，用于配置校验
@@ -45,7 +39,6 @@ _VALID_ASR_ENGINES = ('sensevoice', 'qwen3asr', 'funasr')
 def load_config():
     """从 config 文件加载配置。config 格式为 KEY=VALUE，支持引号和注释。"""
     global ASR_ENGINE, MODEL, MAX_SECONDS, LANG, THREADS
-    global REFINE_MODEL, REFINE_PROMPT, REFINE_THREADS
     if not CONFIG.is_file():
         return
     try:
@@ -65,9 +58,6 @@ def load_config():
                 elif k == 'MAX_SECONDS':   MAX_SECONDS = int(v)
                 elif k == 'LANG':          LANG = v
                 elif k == 'THREADS':       THREADS = int(v)
-                elif k == 'REFINE_MODEL':  REFINE_MODEL = v
-                elif k == 'REFINE_PROMPT': REFINE_PROMPT = v
-                elif k == 'REFINE_THREADS': REFINE_THREADS = int(v)
     except Exception as e:
         log(f'! 配置解析错误: {e}')
 
@@ -230,81 +220,75 @@ def run_asr(audio_path):
     return r.stdout.strip() if r.stdout else ''
 
 
-def run_refine(text):
-    """调用 llama-completion 后处理润色（非交互模式）."""
-    llama = DIR / 'llama.cpp' / 'build' / 'bin' / 'llama-completion'
-    model = DIR / 'models' / REFINE_MODEL
+def refine_by_rules(text):
+    """
+    基于规则的后处理：去填充词、去重复、处理自我纠正、补标点。
+    零模型依赖，纯正则实现。
+    """
+    if not text:
+        return text
 
-    # Step 1: 检查引擎和模型
-    if not llama.is_file():
-        log(f'! 后处理引擎不存在: {llama}')
-        return None
-    if not model.is_file():
-        log(f'! 后处理模型不存在: {model}')
-        return None
+    original = text
+    log(f'规则后处理开始: "{text[:80]}"')
 
-    # Step 2: 构造 prompt（使用系统提示词 + 用户输入）
-    log(f'后处理 Step 1/4: 引擎={llama.name}, 模型={REFINE_MODEL}')
-    log(f'后处理 Step 2/4: 输入文本({len(text)}字): "{text[:80]}"')
-    log(f'后处理 Step 2/4: 系统提示词={len(REFINE_PROMPT)} 字符')
+    # 1. 去除填充词
+    # 常见的填充词和语气词（按优先级排列）
+    fillers = [
+        r'^嗯[，,、 ]*',            # 句首 "嗯"
+        r'^啊[，,、 ]*',            # 句首 "啊"
+        r'^哦[，,、 ]*',            # 句首 "哦"
+        r'^呃[，,、 ]*',            # 句首 "呃"
+        r'^那个[，,、 ]*',          # 句首 "那个"
+        r'^这个[，,、 ]*',          # 句首 "这个"
+        r'^就是说[，,、 ]*',       # 句首 "就是说"
+        r'^那就是[，,、 ]*',       # 句首 "那就是"
+        r'^然后呢[，,、 ]*',
 
-    # Step 3: 调用 llama-completion
-    # 使用聊天模板格式：-sys 系统提示词 + -p 用户输入
-    # 非思考模型（Qwen2.5）需要明确的指令来执行任务
-    # 思考模型（Qwen3.5）可以用 `--reasoning off` 禁用思考
-    cmd = [str(llama), '-m', str(model),
-           '-sys', REFINE_PROMPT,
-           '-p', text,
-           '-n', '300', '-t', str(REFINE_THREADS)]
-    log(f'后处理 Step 3/4: 开始推理 (timeout=60s, threads={REFINE_THREADS})...')
-    t0 = time.time()
-    try:
-        r = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=60)
-    except subprocess.TimeoutExpired:
-        elapsed = time.time() - t0
-        log(f'! 后处理超时 ({elapsed:.1f}s > 60s)，跳过')
-        return None
-    elapsed = time.time() - t0
+        # 句中填充词（替换为空格，后续清理）
+        r'[，,]?\s*嗯\s*',
+        r'[，,]?\s*啊\s*',
+        r'[，,]?\s*哦\s*',
+        r'[，,]?\s*那个\s*',
+        r'[，,]?\s*就是说\s*',
+        r'[，,]?\s*那就是\s*',
+        r'[，,]?\s*你知道的\s*',
+        r'[，,]?\s*你知道吧\s*',
+        r'[，,]?\s*对吧\s*',
+        r'[，,]?\s*对不对\s*',
+        r'[，,]?\s*是不是\s*',
+    ]
+    for pat in fillers:
+        text = re.sub(pat, '', text)
+    log(f'  去填充词: "{text[:80]}"')
 
-    # Step 4: 解析结果
-    raw_out = r.stdout.strip() if r.stdout else ''
-    stderr_out = r.stderr.strip() if r.stderr else ''
-    log(f'后处理 Step 4/4: 耗时={elapsed:.1f}s, returncode={r.returncode}')
-    if stderr_out:
-        log(f'后处理 stderr: {stderr_out[:300]}')
-    log(f'后处理 原始输出({len(raw_out)}字): "{raw_out[:200]}"')
+    # 2. 去除连续重复
+    # 单字重复 2 次以上：今天今天 → 今天
+    text = re.sub(r'(.)\1{2,}', r'\1', text)
+    # 双字及以上重复：不错不错 → 不错 今天今天 → 今天
+    text = re.sub(r'(.{2,6})\1+', r'\1', text)
+    log(f'  去重复: "{text[:80]}"')
 
-    if r.returncode != 0:
-        log(f'! 后处理返回非零: {r.returncode}')
-        return None
+    # 3. 自我纠正检测
+    # 模式：前面的内容 + "不对/不是/错了/哦不" + 后面内容 → 只保留后面
+    # 例：明天，不对，后天下午开会 → 后天下午开会
+    text = re.sub(r'.*?(不对|不是|错了|哦不|我的意思是|应该说|更正)[，,。\s]*', '', text)
+    log(f'  自我纠正: "{text[:80]}"')
 
-    if not raw_out:
-        log('! 后处理输出为空')
-        return None
+    # 4. 清理多余的空格和标点
+    text = re.sub(r'[，,]{2,}', '，', text)          # 多余逗号
+    text = re.sub(r'[\s]+', '', text)                # 清理所有空格
 
-    # 解析 llama-completion 的输出：
-    # 聊天模板格式为：
-    #   system\n提示词\nuser\n输入\nassistant\n<think>...</think>\n实际文本\n\n> EOF by user
-    # 取 </think> 之后最后一段实际文本（跳过 "> EOF by user" 等控制信息）
-    for tag in ['</think>', '<think>', 'assistant']:
-        if tag in raw_out:
-            raw_out = raw_out.split(tag)[-1]
-            raw_out = raw_out.strip()
+    # 5. 补标点
+    if text and text[-1] not in '。！？，；：,.;:?!':
+        # 疑问句检测
+        if any(w in text for w in ['吗', '呢', '吧', '什么', '怎么', '如何', '啥', '哪', '呢?']):
+            text += '？'
+        else:
+            text += '。'
 
-    lines = [l.strip() for l in raw_out.splitlines() if l.strip()]
-    # 去掉 "> EOF" 控制行
-    lines = [l for l in lines if not l.startswith('>')]
-    if lines:
-        # 取最后一行非空输出（排除可能残留的 system/user 回显）
-        result = lines[-1]
-    else:
-        log('! 后处理输出清理后为空')
-        return None
-
-    # 清理结果：去掉可能的引号和多余空格
-    result = result.strip().strip('"').strip("'").strip('）').strip('）').strip()
-    log(f'后处理完成: "{text}" → "{result}"')
-    return result
+    log(f'  补标点: "{text[:80]}"')
+    log(f'规则后处理完成: "{original}" → "{text}"')
+    return text
 
 
 def main():
@@ -441,17 +425,9 @@ def main():
 
     log(f'识别完成: {text}')
 
-    # --- 后处理润色 ---
-    log(f'后处理配置: REFINE_MODEL="{REFINE_MODEL}"')
-    if REFINE_MODEL:
-        refined = run_refine(text)
-        if refined:
-            log(f'润色生效: "{text}" → "{refined}"')
-            text = refined
-        else:
-            log(f'润色未生效，使用原始文本')
-    else:
-        log('后处理未配置，跳过')
+    # --- 后处理润色（规则版） ---
+    log(f'后处理规则: 去填充词 + 去重复 + 自我纠正 + 补标点')
+    text = refine_by_rules(text)
 
     # --- 输出文本 ---
     log(f'最终文本: "{text[:100]}"')

@@ -36,8 +36,6 @@ def test_load_config_defaults():
     assert mod.MODEL == 'sense-voice-small-q5_k.gguf'
     assert mod.LANG == 'zh'
     assert mod.THREADS == 4
-    assert mod.REFINE_MODEL == ''
-    assert mod.REFINE_THREADS == 4
     print('✓ 默认配置值正确')
 
 
@@ -49,8 +47,6 @@ def test_load_config_from_file():
         f.write('MODEL="Qwen3-ASR-0.6B-Q4_K_M.gguf"\n')
         f.write('LANG="en"\n')
         f.write('THREADS=8\n')
-        f.write('REFINE_MODEL="Qwen3.5-0.8B-Q4_K_M.gguf"\n')
-        f.write('REFINE_THREADS=4\n')
         tmp_path = f.name
 
     try:
@@ -62,8 +58,6 @@ def test_load_config_from_file():
         assert mod.MODEL == 'Qwen3-ASR-0.6B-Q4_K_M.gguf'
         assert mod.LANG == 'en'
         assert mod.THREADS == 8
-        assert mod.REFINE_MODEL == 'Qwen3.5-0.8B-Q4_K_M.gguf'
-        assert mod.REFINE_THREADS == 4
         print('✓ 文件配置加载正确')
     finally:
         os.unlink(tmp_path)
@@ -99,9 +93,40 @@ def test_parse_output():
     print('✓ parse_output 函数正确')
 
 
+def test_refine_by_rules():
+    """测试规则后处理函数."""
+    mod = _load_module()
+
+    # 去填充词：去掉句首 "嗯"、"那个"
+    r = mod.refine_by_rules('嗯那个我们明天下午三点开会吧')
+    assert '我们明天' in r, f"应保留核心内容，实际: {r}"
+
+    # 去重复
+    r = mod.refine_by_rules('今天今天天气不错不错')
+    assert '天气' in r, f"应包含天气，实际: {r}"
+
+    # 自我纠正（不对 → 保留后面）
+    r = mod.refine_by_rules('明天不对后天下午开会')
+    assert '后天' in r, f"应包含后天，实际: {r}"
+
+    # 补标点（疑问句应加问号）
+    r = mod.refine_by_rules('这个方案的优缺点分别是什么呢')
+    assert '？' in r, f"应有问号，实际: {r}"
+
+    # 基本识别
+    r = mod.refine_by_rules('你好世界')
+    assert '你好' in r, f"应包含你好，实际: {r}"
+
+    # 空文本
+    assert mod.refine_by_rules('') == ''
+
+    print('✓ refine_by_rules 函数正确')
+
+
 if __name__ == '__main__':
     test_load_config_defaults()
     test_load_config_from_file()
     test_invalid_asr_engine()
     test_parse_output()
+    test_refine_by_rules()
     print('\n所有配置测试通过 ✓')
