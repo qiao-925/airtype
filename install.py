@@ -373,6 +373,9 @@ def deploy_config(asr_engine, tier_model):
         f'THREADS=4\n'
         f'\n'
         f'# 后处理规则（自动处理：去填充词、去重复、自我纠正、补标点）\n'
+        f'\n'
+        f'# 粘贴快捷键：ctrl+v | shift+insert | ctrl+shift+v\n'
+        f'PASTE_SHORTCUT="ctrl+v"\n'
     )
     config_path.write_text(cfg)
     info(f'配置 → {config_path}')

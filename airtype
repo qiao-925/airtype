@@ -31,6 +31,13 @@ THREADS = 4
 # 零模型依赖、零延迟、零磁盘额外开销
 ENABLE_RULES = True
 
+# ========== 输入方式配置 ==========
+# PASTE_SHORTCUT: 粘贴快捷键，可选值：
+#   "ctrl+v"       — Ctrl+V（默认，大部分应用）
+#   "shift+insert" — Shift+Insert（终端等）
+#   "ctrl+shift+v" — Ctrl+Shift+V（某些终端）
+PASTE_SHORTCUT = 'ctrl+v'
+
 
 # 合法的 ASR 引擎列表，用于配置校验
 _VALID_ASR_ENGINES = ('sensevoice', 'qwen3asr', 'funasr')
@@ -38,7 +45,7 @@ _VALID_ASR_ENGINES = ('sensevoice', 'qwen3asr', 'funasr')
 
 def load_config():
     """从 config 文件加载配置。config 格式为 KEY=VALUE，支持引号和注释。"""
-    global ASR_ENGINE, MODEL, MAX_SECONDS, LANG, THREADS
+    global ASR_ENGINE, MODEL, MAX_SECONDS, LANG, THREADS, PASTE_SHORTCUT
     if not CONFIG.is_file():
         return
     try:
@@ -58,6 +65,7 @@ def load_config():
                 elif k == 'MAX_SECONDS':   MAX_SECONDS = int(v)
                 elif k == 'LANG':          LANG = v
                 elif k == 'THREADS':       THREADS = int(v)
+                elif k == 'PASTE_SHORTCUT': PASTE_SHORTCUT = v
     except Exception as e:
         log(f'! 配置解析错误: {e}')
 
@@ -382,6 +390,9 @@ def main():
     checks = [
         (model_path.is_file(), f'Model not found: {MODEL}'),
         (shutil.which('rec') is not None, 'sox (rec) not installed'),
+        # 至少有一个输入工具可用
+        (shutil.which('wtype') is not None or shutil.which('ydotool') is not None,
+         'Neither wtype nor ydotool found, install one of them'),
     ]
 
     # 检查对应引擎的 runtime 二进制
@@ -485,31 +496,81 @@ def main():
         time.sleep(0.1)  # 等待焦点回到目标窗口
         # 清理文本中可能导致浏览器跳转的控制字符
         text = text.replace('\n', ' ').replace('\r', '').replace('\t', ' ')
-        # 用剪贴板 + 模拟粘贴键代替 wtype 直接输入，避免浏览器跳转和输入法冲突
-        pasted = False
-        # Step 1: 复制到剪贴板
-        log('Step 1: 复制到剪贴板...')
+
+        # 输入策略：优先用剪贴板+粘贴快捷键（避免浏览器跳转）
+        # 如果粘贴失败，回退到直接字符输入
+        input_success = False
+        safe_text = text.replace('\n', ' ').replace('\r', '')
+
+        # 构建粘贴快捷键命令
+        def build_paste_cmd(shortcut):
+            """根据配置的快捷键生成对应的系统命令。"""
+            mod_map = {'ctrl': 'ctrl', 'shift': 'shift', 'alt': 'alt', 'super': 'super'}
+            ctrl_key = 'ctrl'
+            paste_methods = []
+
+            # wtype 方案
+            if shutil.which('wtype'):
+                if shortcut == 'ctrl+v':
+                    paste_methods.append((['wtype', '-M', 'ctrl', 'v', '-m', 'ctrl'], 'wtype'))
+                elif shortcut == 'shift+insert':
+                    paste_methods.append((['wtype', '-M', 'shift', 'Insert', '-m', 'shift'], 'wtype'))
+                elif shortcut == 'ctrl+shift+v':
+                    paste_methods.append((['wtype', '-M', 'ctrl', '-M', 'shift', 'v', '-m', 'shift', '-m', 'ctrl'], 'wtype'))
+                # 额外备选：用 wtype 直接模拟
+                paste_methods.append((['wtype', '--', safe_text], 'wtype'))
+
+            # ydotool 方案（备选）
+            if shutil.which('ydotool'):
+                if shortcut == 'ctrl+v':
+                    paste_methods.insert(0, (['ydotool', 'key', 'ctrl+v'], 'ydotool'))
+                elif shortcut == 'shift+insert':
+                    paste_methods.insert(0, (['ydotool', 'key', 'shift+insert'], 'ydotool'))
+                elif shortcut == 'ctrl+shift+v':
+                    paste_methods.insert(0, (['ydotool', 'key', 'ctrl+shift+v'], 'ydotool'))
+
+            return paste_methods
+
+        # 第一步：复制到剪贴板
+        log('输入 Step 1: 复制到剪贴板...')
         if copy_to_clipboard(text):
             time.sleep(0.05)  # 等待剪贴板就绪
-            # Step 2: 模拟 Ctrl+V 粘贴 (通过 wtype 发送快捷键)
-            log('Step 2: 模拟 Ctrl+V 粘贴...')
-            r = subprocess.run(['wtype', '-M', 'ctrl', 'v', '-m', 'ctrl'], check=False)
-            if r.returncode == 0:
-                log('已粘贴输入')
-                pasted = True
-            else:
-                log(f'! wtype 粘贴失败: exit={r.returncode}, stderr={r.stderr}')
+
+            # 第二步：尝试粘贴快捷键
+            paste_methods = build_paste_cmd(PASTE_SHORTCUT)
+            for cmd, tool in paste_methods:
+                if 'ydotool' in tool or 'wtype' in tool:
+                    log(f'输入 Step 2: 尝试 {tool} 粘贴 ({PASTE_SHORTCUT})...')
+                    r = subprocess.run(cmd, check=False)
+                    if r.returncode == 0:
+                        log(f'输入成功: {tool} 粘贴')
+                        input_success = True
+                        break
+                    else:
+                        stderr = r.stderr.strip() if r.stderr else ''
+                        log(f'! {tool} 粘贴失败: exit={r.returncode} {stderr[:100]}')
         else:
-            log('! 剪贴板复制失败')
-        if not pasted:
-            # 回退: 直接用 wtype 输入 (去掉换行符以防万一)
-            safe_text = text.replace('\n', ' ').replace('\r', '')
-            log(f'回退: 直接 wtype 输入 ({len(safe_text)} 字符)...')
-            r = subprocess.run(['wtype', '--', safe_text], check=False)
-            if r.returncode != 0:
-                log(f'! wtype 失败: exit={r.returncode}, stderr={r.stderr}')
-            else:
-                log('已输入 (回退模式)')
+            log('! 剪贴板复制失败，回退到直接输入')
+
+        # 第三步：回退到直接字符输入
+        if not input_success:
+            log(f'输入 Step 3: 直接字符输入 ({len(safe_text)} 字符)...')
+            # 尝试 ydotool type（更稳定）
+            if shutil.which('ydotool'):
+                r = subprocess.run(['ydotool', 'type', safe_text], check=False)
+                if r.returncode == 0:
+                    log('已输入 (ydotool type)')
+                    input_success = True
+                else:
+                    log(f'! ydotool type 失败: exit={r.returncode}')
+            # 最后回退：wtype 直接输入
+            if not input_success and shutil.which('wtype'):
+                r = subprocess.run(['wtype', '--', safe_text], check=False)
+                if r.returncode == 0:
+                    log('已输入 (wtype 回退)')
+                    input_success = True
+                else:
+                    log(f'! wtype 回退失败: exit={r.returncode}')
 
 
 def _handle_signal(signum, frame):
