@@ -10,17 +10,7 @@
 curl -fsSL https://raw.githubusercontent.com/qiao-925/airtype/master/install.py | python3
 ```
 
-安装过程中会依次选择：
-1. ASR 语音识别引擎
-2. ASR 模型量化等级
-3. 后处理润色模型（可跳过）
-
-## 特性
-
-- **可插拔 ASR 引擎**：SenseVoice / Qwen3-ASR / Fun-ASR-Nano，配置切换
-- **后处理润色**：可选 Qwen3.5 LLM 对识别结果做纠错、去语气词、补标点
-- **极简部署**：单 config 文件驱动，安装脚本自动编译和下载
-- **完全本地**：所有推理在本地 CPU/GPU 完成，零网络依赖
+安装过程选择 SenseVoice-Small 模型量化等级即可。
 
 ## 快捷键绑定
 
@@ -32,37 +22,42 @@ curl -fsSL https://raw.githubusercontent.com/qiao-925/airtype/master/install.py 
   └─ 再按 Alt+V → 文字出现在光标位置
 ```
 
-### ASR 引擎
-
-| 引擎 | 配置值 | 特点 | 延迟（10s 音频） |
-|------|--------|------|-----------------|
-| **SenseVoice** | `sensevoice` | 速度最快，5 种语言 | ~0.5s |
-| **Qwen3-ASR** | `qwen3asr` | 准确率高，52 语言，22 种方言 | ~2s |
-| **Fun-ASR-Nano** | `funasr` | 方言支持好，官方 llama.cpp runtime | ~5s |
-
-### 后处理模型
-
-| 模型 | 大小 | 延迟 | 备注 |
-|------|------|------|------|
-| Qwen3.5-0.8B | ~500 MB | 2-4s | ★ 推荐，轻量 |
-| Qwen3.5-2B | ~1.2 GB | 4-10s | 更强纠错 |
-
 ## 运行流程
 
 ```
 快捷键
   ↓
-airtype (Python, ~300 行)
+airtype (Python, ~430 行)
   ├─ ① rec (sox)            → 16kHz mono WAV 录音
-  ├─ ② ASR 引擎              → 语音识别（可插拔）
-  │     ├─ SenseVoice.cpp
-  │     ├─ transcribe.cpp
-  │     └─ llama-funasr-cli
-  ├─ ③ regex                → 多段文本解析拼接
-  ├─ ④ llama-cli (可选)     → Qwen3.5 后处理润色
-  └─ ⑤ wtype / clipboard    → 键盘输入
+  ├─ ② SenseVoice.cpp       → 本地 STT 推理（含 ITN 标点）
+  ├─ ③ regex                → 多段文本解析 + 控制字符清理
+  ├─ ④ 规则后处理            → 去填充词、去重复、自我纠正、补标点、格式化列表
+  └─ ⑤ wtype                → 逐字键盘输入（10字/批，防浏览器跳转）
   │
   └─ ⑥ voice-overlay (C, ~224 行) → SDL2 状态 pill
+```
+
+## 后处理规则
+
+纯规则实现，零模型依赖、零延迟、零磁盘开销：
+
+| 规则 | 效果 | 示例 |
+|------|------|------|
+| 去填充词 | 去除"嗯、啊、那个、就是说、你知道的、对吧、对不对" | `嗯那个我们开会` → `我们开会` |
+| 去重复 | 合并连续重复字词 | `今天今天天气不错不错` → `今天天气不错` |
+| 自我纠正 | 句首"不对/不是/错了"等纠正标记，跳过前文 | `明天不对后天开会` → `后天开会` |
+| 格式化列表 | 第一步/第二步 / 首先/然后/最后 自动编号 | `第一步打开设置第二步点击关于` → `1.打开设置；2.点击关于` |
+| 补标点 | 疑问句加？陈述句加。 | `这个方案怎么样` → `这个方案怎么样？` |
+
+## 配置
+
+`~/.local/share/airtype/config`
+
+```ini
+MODEL="sense-voice-small-q8_0.gguf"
+MAX_SECONDS=3600
+LANG="zh"
+THREADS=4
 ```
 
 ## 日志
@@ -72,16 +67,13 @@ airtype (Python, ~300 行)
 ## 测试
 
 ```bash
-python3 tests/test_config.py    # 配置解析测试
+python3 tests/test_config.py    # 配置解析 + 规则后处理测试
 python3 tests/test_asr.py       # ASR 策略函数测试
 ```
 
 ## Ack
 
-- [SenseVoice.cpp](https://github.com/lovemefan/SenseVoice.cpp) — SenseVoice ASR 引擎
-- [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) — Qwen3-ASR 引擎
-- [Fun-ASR](https://github.com/FunAudioLLM/Fun-ASR) — Fun-ASR-Nano 引擎
-- [llama.cpp](https://github.com/ggml-org/llama.cpp) — 后处理 LLM 引擎
+- [SenseVoice.cpp](https://github.com/lovemefan/SenseVoice.cpp) — ASR 引擎
 - [SDL2](https://www.libsdl.org/) — 跨平台图形
 - [stb_truetype](https://github.com/nothings/stb) — 字体光栅化
 
