@@ -8,7 +8,7 @@
   python3 tests/test_refine.py --test 1            # 只运行第 1 个测试
 """
 
-import os, sys, time, subprocess, argparse
+import os, sys, time, subprocess, argparse, importlib.util, importlib.machinery
 from pathlib import Path
 
 # 将项目根目录加入 path
@@ -65,12 +65,16 @@ def load_refine_config():
 def run_refine_test(text, prompt, model_path, llama_path, threads=4, timeout=60):
     """
     执行单次后处理推理，返回 (结果文本, 耗时秒数, stderr, returncode)。
+
+    使用 llama-completion 的补全格式：
+    -p "输入：{text}\n输出："
+    模型会补全"输出："之后的内容。
     """
-    full_prompt = f'{prompt}\n\n{text}'
+    full_prompt = f'输入：{text}\n输出：'
     cmd = [
-        str(llama_path), '-m', str(model_path), '-p', full_prompt,
-        '-n', '512', '-t', str(threads),
-        '--no-display-prompt', '--log-disable',
+        str(llama_path), '-m', str(model_path),
+        '-p', full_prompt,
+        '-n', '300', '-t', str(threads),
     ]
 
     t0 = time.time()
@@ -85,8 +89,17 @@ def run_refine_test(text, prompt, model_path, llama_path, threads=4, timeout=60)
     raw = r.stdout.strip() if r.stdout else ''
     stderr = r.stderr.strip() if r.stderr else ''
 
-    # 取最后一行非空输出（处理 llama-cli 的 prompt 回显）
+    # 解析 llama-completion 的输出（聊天模板格式）
+    # 格式：system\n提示词\nuser\n输入\nassistant\n<think>...</think>\n实际文本\n\n> EOF by user
+    # 取 </think> 之后最后一段实际文本（跳过 "> EOF by user" 等控制信息）
+    for tag in ['</think>', '<think>', 'assistant']:
+        if tag in raw:
+            raw = raw.split(tag)[-1]
+            raw = raw.strip()
+
     lines = [l.strip() for l in raw.splitlines() if l.strip()]
+    # 去掉 "> EOF" 控制行
+    lines = [l for l in lines if not l.startswith('>')]
     result = lines[-1] if lines else ''
 
     return result, elapsed, stderr, r.returncode
@@ -110,9 +123,10 @@ def main():
     parser.add_argument('--timeout', type=int, default=60, help='超时秒数')
     args = parser.parse_args()
 
-    # 加载配置
+    # 加载配置（load_config 在 main() 中调用，测试中需手动调用）
     mod = load_refine_config()
-    llama_path = mod.DIR / 'llama.cpp' / 'build' / 'bin' / 'llama-cli'
+    mod.load_config()
+    llama_path = mod.DIR / 'llama.cpp' / 'build' / 'bin' / 'llama-completion'
     model_path = mod.DIR / 'models' / mod.REFINE_MODEL
     prompt = mod.REFINE_PROMPT
 

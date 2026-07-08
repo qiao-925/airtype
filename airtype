@@ -250,12 +250,11 @@ def run_refine(text):
     log(f'后处理 Step 2/4: 系统提示词={len(REFINE_PROMPT)} 字符')
 
     # Step 3: 调用 llama-completion
-    # -sys: 系统提示词，设定模型行为
-    # -p:   用户输入文本
-    # llama-completion 会自动应用聊天模板并生成回复
+    # 使用最简单的补全格式，让模型直接输出修正结果
+    # 注意：不加系统提示词前缀，避免引发模型分析行为
+    full_prompt = f'输入：{text}\n输出：'
     cmd = [str(llama), '-m', str(model),
-           '-sys', REFINE_PROMPT,
-           '-p', text,
+           '-p', full_prompt,
            '-n', '300', '-t', str(REFINE_THREADS)]
     log(f'后处理 Step 3/4: 开始推理 (timeout=60s, threads={REFINE_THREADS})...')
     t0 = time.time()
