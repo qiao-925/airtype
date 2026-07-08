@@ -489,22 +489,14 @@ def main():
             show_error('Clipboard copy failed')
     else:
         kill_overlay()
-        time.sleep(0.1)  # 等待焦点回到目标窗口
-        # 直接字符输入：替换换行为空格
+        time.sleep(0.2)  # 等待焦点回到目标窗口
         safe_text = text.replace('\n', ' ').replace('\r', '').replace('\t', ' ')
         log(f'字符输入 ({len(safe_text)} 字符)...')
-        # ydotool type 自带 12ms 字符间延迟，防止丢字
-        r = subprocess.run(['ydotool', 'type', safe_text], check=False)
+        r = subprocess.run(['wtype', '--', safe_text], check=False)
         if r.returncode == 0:
             log('已输入')
         else:
-            # wtype 作为回退
-            log(f'! ydotool 失败，回退 wtype: exit={r.returncode}')
-            r = subprocess.run(['wtype', '--', safe_text], check=False)
-            if r.returncode == 0:
-                log('已输入 (wtype)')
-            else:
-                log(f'! wtype 失败: exit={r.returncode}')
+            log(f'! wtype 失败: exit={r.returncode}')
 
 
 def _handle_signal(signum, frame):
