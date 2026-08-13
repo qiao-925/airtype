@@ -22,8 +22,10 @@ curl -fsSL https://raw.githubusercontent.com/qiao-925/airtype/master/install.py 
 | openSUSE | ❌ 未支持 | 尚未适配 zypper |
 | Alpine Linux | ❌ 未支持 | 未适配 apk，且依赖 glibc 生态 |
 
-> 文本注入依赖 Wayland 合成器实现虚拟键盘协议：**KDE Plasma / Sway / Hyprland** 可用，
-> **GNOME** 暂不可用；X11 会话尚未支持直接输入（可先配合 `--clipboard` 使用）。
+> 文本注入：优先 **ydotool**（基于 `/dev/uinput`，任意合成器可用，支持任意 Unicode，需
+> `ydotoold` 守护进程）；回退 **wtype**（基于虚拟键盘协议，仅 Sway / Hyprland / River 等
+> wlroots 合成器可用，**KDE / GNOME 不实现该协议**）。X11 会话尚未支持直接输入（可先配合
+> `--clipboard` 使用）。
 
 
 ## 快捷键绑定

@@ -99,6 +99,34 @@ def copy_to_clipboard(text):
     return False
 
 
+def inject_text(text):
+    """注入文本到当前聚焦窗口。
+
+    优先 ydotool（基于 /dev/uinput，不依赖合成器协议，KDE / wlroots 均可用，
+    支持任意 Unicode）；回退 wtype（基于虚拟键盘协议，仅 wlroots 系合成器支持，
+    KDE / GNOME 不实现该协议）。任何失败都会记录到日志，不再静默。
+    """
+    if shutil.which('ydotool'):
+        r = subprocess.run(['ydotool', 'type', text],
+                           capture_output=True, text=True, check=False)
+        if r.returncode == 0:
+            return True
+        log(f'! ydotool 注入失败: {r.stderr.strip()[:160] or "请确认 ydotoold 守护进程已运行"}')
+    if shutil.which('wtype'):
+        # 分批输入，每批 10 字间隔 20ms，防止浏览器误判
+        for i in range(0, len(text), 10):
+            batch = text[i:i + 10]
+            r = subprocess.run(['wtype', '--', batch],
+                               capture_output=True, text=True, check=False)
+            if r.returncode != 0:
+                log(f'! wtype 注入失败: {r.stderr.strip()[:160]}')
+                return False
+            time.sleep(0.02)
+        return True
+    log('! 无可用注入工具（需要 ydotool 或 wtype）')
+    return False
+
+
 _cleaned_up = False
 _audio = None
 
@@ -327,7 +355,8 @@ def main():
         (engine_bin.is_file(), 'SenseVoice engine not found'),
         (model_path.is_file(), f'Model not found: {MODEL}'),
         (shutil.which('rec') is not None, 'sox (rec) not installed'),
-        (shutil.which('wtype') is not None, 'wtype not installed'),
+        (shutil.which('wtype') is not None or shutil.which('ydotool') is not None,
+         '文本注入工具未安装（需要 ydotool 或 wtype）'),
     ]
     for ok, msg in checks:
         if not ok:
@@ -410,12 +439,9 @@ def main():
         time.sleep(0.5)  # 等待焦点回到目标窗口
         safe_text = text.replace('\n', ' ').replace('\r', '').replace('\t', ' ')
         log(f'字符输入 ({len(safe_text)} 字符)...')
-        # 分批输入，每批 10 字间隔 20ms，防止浏览器误判
-        batch_size = 10
-        for i in range(0, len(safe_text), batch_size):
-            batch = safe_text[i:i + batch_size]
-            subprocess.run(['wtype', '--', batch], check=False)
-            time.sleep(0.02)
+        if not inject_text(safe_text):
+            show_error('Injection failed')
+            sys.exit(0)
         log('已输入')
 
 

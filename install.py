@@ -182,8 +182,9 @@ def install_deps():
         run(['sudo', 'apt', 'install', '-y'] + APT_DEPS.split())
     elif shutil.which('pacman'):
         # Arch 系列：仅安装依赖，避免 -Syu 顺带升级整个系统
+        # ydotool = uinput 注入（KDE/wlroots 均可），wl-clipboard = wl-copy 剪贴板
         deps = ['cmake', 'gcc', 'git', 'sox', 'ffmpeg', 'wtype', 'curl', 'make',
-                'pkgconf', 'ttf-dejavu']
+                'pkgconf', 'ttf-dejavu', 'ydotool', 'wl-clipboard']
         # sdl2 与 sdl2-compat 互斥（sdl2-compat replaces sdl2），且都提供 SDL2 头文件。
         # 已装其一则跳过，否则安装官方 sdl2。
         if all(subprocess.run(['pacman', '-Q', p],
@@ -192,6 +193,14 @@ def install_deps():
                for p in ('sdl2', 'sdl2-compat')):
             deps.append('sdl2')
         run(['sudo', 'pacman', '-S', '--needed', '--noconfirm'] + deps)
+        # ydotool 依赖 ydotoold 守护进程；若 /dev/uinput 对当前用户可写则用用户服务启动
+        if shutil.which('ydotool'):
+            r = subprocess.run(['systemctl', '--user', 'enable', '--now', 'ydotoold'],
+                               capture_output=True, text=True)
+            if r.returncode == 0:
+                info('ydotoold 守护进程已启动')
+            else:
+                warn('未能自动启动 ydotoold，请手动执行: sudo systemctl enable --now ydotoold')
     elif shutil.which('dnf'):
         # Fedora/RHEL 系列：实验性支持，尚未完整验证
         warn('Fedora/RHEL 系列为实验性支持，尚未完整验证')
