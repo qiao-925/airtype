@@ -10,6 +10,21 @@
 curl -fsSL https://raw.githubusercontent.com/qiao-925/airtype/master/install.py | python3
 ```
 
+## 发行版支持
+
+一键安装脚本已适配的发行版系列（状态随实测持续更新）：
+
+| 发行版系列 | 状态 | 说明 |
+|---|---|---|
+| Debian / Ubuntu（含 Pop!_OS） | ✅ 完整支持 | 开发与验证基准 |
+| Arch Linux（CachyOS / Manjaro / EndeavourOS） | ✅ 支持 | 依赖包名已适配，待各发行版实测 |
+| Fedora / RHEL / CentOS | 🚧 实验性 | 依赖包名已修正，尚未完整验证 |
+| openSUSE | ❌ 未支持 | 尚未适配 zypper |
+| Alpine Linux | ❌ 未支持 | 未适配 apk，且依赖 glibc 生态 |
+
+> 文本注入依赖 Wayland 合成器实现虚拟键盘协议：**KDE Plasma / Sway / Hyprland** 可用，
+> **GNOME** 暂不可用；X11 会话尚未支持直接输入（可先配合 `--clipboard` 使用）。
+
 
 ## 快捷键绑定
 
