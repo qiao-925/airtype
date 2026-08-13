@@ -100,30 +100,63 @@ def copy_to_clipboard(text):
 
 
 def inject_text(text):
-    """注入文本到当前聚焦窗口。
+    """注入文本到当前聚焦窗口（支持任意 Unicode）。
 
-    优先 ydotool（基于 /dev/uinput，不依赖合成器协议，KDE / wlroots 均可用，
-    支持任意 Unicode）；回退 wtype（基于虚拟键盘协议，仅 wlroots 系合成器支持，
-    KDE / GNOME 不实现该协议）。任何失败都会记录到日志，不再静默。
+    Wayland 下没有通用的 CJK 直接注入手段：
+    - wtype 依赖虚拟键盘协议，仅 wlroots 合成器可用（KDE/GNOME 不实现），且只能打键位图内字符
+    - ydotool type 仅有 ASCII 键位表（128 项），中文会被静默跳过（实测确认）
+    因此含非 ASCII 字符的文本走「剪贴板 + Ctrl+V 粘贴」：先用 wl-copy/xclip 写入剪贴板，
+    再让 ydotool/wtype 发送粘贴按键。纯 ASCII 文本直接 type。
     """
-    if shutil.which('ydotool'):
-        r = subprocess.run(['ydotool', 'type', text],
-                           capture_output=True, text=True, check=False)
-        if r.returncode == 0:
-            return True
-        log(f'! ydotool 注入失败: {r.stderr.strip()[:160] or "请确认 ydotoold 守护进程已运行"}')
-    if shutil.which('wtype'):
-        # 分批输入，每批 10 字间隔 20ms，防止浏览器误判
-        for i in range(0, len(text), 10):
-            batch = text[i:i + 10]
-            r = subprocess.run(['wtype', '--', batch],
+    has_non_ascii = any(ord(ch) > 127 for ch in text)
+
+    def send_paste():
+        """发送 Ctrl+V（keycode 29=LeftCtrl, 47=V）.
+
+        实测 ydotool 快速连发 down/up 时，KWin 会丢 keyup、把键当成按住，
+        触发自动重复——一次注入实际粘贴 ~6-8 次（即「重复输入」问题）。
+        因此粘贴分三步：
+          1. 预清理：先强制释放 Ctrl/V，掐断上一次残留的按住状态
+          2. 粘贴：显式 down→up、事件间隔 40ms，让合成器逐帧处理、keyup 不丢
+          3. 后清理：再强制释放，掐断刚启动的自动重复
+        该序列在 KDE Wayland 下实测 12/12 次恰好触发 1 次粘贴。
+        """
+        def yk(args):
+            return subprocess.run(['ydotool'] + args,
+                                  capture_output=True, text=True, check=False)
+
+        if shutil.which('ydotool'):
+            yk(['key', '-d', '30', '29:0', '47:0'])      # 预清理：释放残留按键
+            time.sleep(0.05)
+            r = yk(['key', '-d', '40', '29:1', '47:1', '47:0', '29:0'])  # 粘贴
+            time.sleep(0.05)
+            yk(['key', '-d', '30', '29:0', '47:0'])      # 后清理：掐断自动重复
+            if r.returncode == 0:
+                return True
+            log(f'! ydotool 粘贴失败: {r.stderr.strip()[:160]}')
+        if shutil.which('wtype'):
+            r = subprocess.run(['wtype', '-M', 'ctrl', '-k', 'v'],
                                capture_output=True, text=True, check=False)
-            if r.returncode != 0:
-                log(f'! wtype 注入失败: {r.stderr.strip()[:160]}')
-                return False
-            time.sleep(0.02)
-        return True
-    log('! 无可用注入工具（需要 ydotool 或 wtype）')
+            if r.returncode == 0:
+                return True
+            log(f'! wtype 粘贴失败: {r.stderr.strip()[:160]}')
+        return False
+
+    if has_non_ascii:
+        # 中文等非 ASCII：复制到剪贴板后粘贴
+        if not copy_to_clipboard(text):
+            log('! 剪贴板不可用（需 wl-copy/xclip/xsel），无法粘贴注入')
+            return False
+        time.sleep(0.15)  # 等待剪贴板就绪
+        return send_paste()
+
+    # 纯 ASCII：直接键入
+    for name, cmd in (('ydotool', ['ydotool', 'type']), ('wtype', ['wtype', '--'])):
+        if shutil.which(name):
+            r = subprocess.run(cmd + [text], capture_output=True, text=True, check=False)
+            if r.returncode == 0:
+                return True
+            log(f'! {name} 注入失败: {r.stderr.strip()[:160]}')
     return False
 
 
