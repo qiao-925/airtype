@@ -193,14 +193,15 @@ def install_deps():
                for p in ('sdl2', 'sdl2-compat')):
             deps.append('sdl2')
         run(['sudo', 'pacman', '-S', '--needed', '--noconfirm'] + deps)
-        # ydotool 依赖 ydotoold 守护进程；若 /dev/uinput 对当前用户可写则用用户服务启动
+        # ydotool 依赖 ydotoold 守护进程（Arch 包的用户服务单元名为 ydotool.service）；
+        # 若 /dev/uinput 对当前用户可写则用用户服务启动，无需 root
         if shutil.which('ydotool'):
-            r = subprocess.run(['systemctl', '--user', 'enable', '--now', 'ydotoold'],
+            r = subprocess.run(['systemctl', '--user', 'enable', '--now', 'ydotool'],
                                capture_output=True, text=True)
             if r.returncode == 0:
                 info('ydotoold 守护进程已启动')
             else:
-                warn('未能自动启动 ydotoold，请手动执行: sudo systemctl enable --now ydotoold')
+                warn('未能自动启动 ydotoold，请手动执行: systemctl --user enable --now ydotool（需 /dev/uinput 访问权限）')
     elif shutil.which('dnf'):
         # Fedora/RHEL 系列：实验性支持，尚未完整验证
         warn('Fedora/RHEL 系列为实验性支持，尚未完整验证')
