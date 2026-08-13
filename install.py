@@ -172,18 +172,26 @@ def install_deps():
     info('安装系统依赖 …')
     # 各发行版系列的软件包名（可执行文件名相同，包名不同）：
     #   g++         → Debian: g++ / Fedora,RHEL: gcc-c++ / Arch: 随 gcc 提供
-    #   libsdl2-dev → Debian: libsdl2-dev / Fedora,RHEL: SDL2-devel / Arch: sdl2
+    #   libsdl2-dev → Debian: libsdl2-dev / Fedora,RHEL: SDL2-devel
     #   pkg-config  → Arch 由 pkgconf 提供
     #   ttf-dejavu  → 保证 overlay 能加载到字体（Arch 默认不装）
     APT_DEPS    = 'cmake gcc g++ git sox libsdl2-dev ffmpeg wtype curl make'
-    PACMAN_DEPS = 'cmake gcc git sox sdl2 ffmpeg wtype curl make pkgconf ttf-dejavu'
     DNF_DEPS    = 'cmake gcc gcc-c++ git sox SDL2-devel ffmpeg wtype curl make'
     if shutil.which('apt'):
         run(['sudo', 'apt', 'update', '-qq'])
         run(['sudo', 'apt', 'install', '-y'] + APT_DEPS.split())
     elif shutil.which('pacman'):
         # Arch 系列：仅安装依赖，避免 -Syu 顺带升级整个系统
-        run(['sudo', 'pacman', '-S', '--needed', '--noconfirm'] + PACMAN_DEPS.split())
+        deps = ['cmake', 'gcc', 'git', 'sox', 'ffmpeg', 'wtype', 'curl', 'make',
+                'pkgconf', 'ttf-dejavu']
+        # sdl2 与 sdl2-compat 互斥（sdl2-compat replaces sdl2），且都提供 SDL2 头文件。
+        # 已装其一则跳过，否则安装官方 sdl2。
+        if all(subprocess.run(['pacman', '-Q', p],
+                              stdout=subprocess.DEVNULL,
+                              stderr=subprocess.DEVNULL).returncode != 0
+               for p in ('sdl2', 'sdl2-compat')):
+            deps.append('sdl2')
+        run(['sudo', 'pacman', '-S', '--needed', '--noconfirm'] + deps)
     elif shutil.which('dnf'):
         # Fedora/RHEL 系列：实验性支持，尚未完整验证
         warn('Fedora/RHEL 系列为实验性支持，尚未完整验证')
